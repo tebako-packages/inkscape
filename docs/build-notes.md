@@ -124,6 +124,20 @@ Host is Apple Silicon; the leg was built under docker `linux/amd64`
 (Rosetta-backed emulation — measured ~native compile speed, so the real
 recipe leg was proven, not an arm64 stand-in).
 
+**Where the build stands (complete except where noted):**
+- inkscape vcpkg deps: **all 29 ports built** (gsl, bdwgc, lcms,
+  double-conversion, libpng, zlib, libxml2, libxslt, boost-filesystem,
+  boost-stacktrace + 19 header-only boost modules) — nothing outstanding.
+- inkscape build/install/closure/pre-image-smoke: **complete**, locally
+  and on CI.
+- dwarfs-t tools (pinned `05e31631`): vcpkg dep set complete;
+  **mkdwarfs + dwarfsextract built locally**, the `dwarfs` fuse driver
+  failed to link *locally only* (libfuse `fuse_pkgversion`/`fuse_opt_*`
+  undefined — older dwarfs-t-pinned vcpkg; the same commit links all
+  three on CI against the feedstock vcpkg baseline).
+- Payload image: **packed locally (45.9 MB) and on CI (33.2 MB)**.
+- ONLY open item: mount-mode boot-smoke on GHA runners (details below).
+
 **Payload build: PROVEN.** `tools/build recipe.yml 1.4.3 x86_64-linux-gnu`
 completed end-to-end: sha256-verified tarball fetch, 29 vcpkg ports
 (x64-linux-dynamic overlay triplet), cmake configure+build+install
@@ -172,9 +186,27 @@ build, an mtime watchdog that kill/resumes stuck cycles. Docker host-mount
   same 33.2 MB with sha256 `4d8d58d8beecbbf6…`) — timestamps, apt drift
   and image metadata; a reproducibility pass is follow-up work.
 
-**Boot-smoke:** mount + `env -i inkscape --version` + SVG→PNG/PDF export +
-ldd sweep: see run logs; local extract-mode evidence below.
-<!-- SMOKE-RESULTS -->
+**Boot-smoke (spec: run `--version` + exports FROM the image):**
+- Extract mode (dwarfsextract): implemented as boot_smoke's degraded
+  fallback; works, but under Rosetta emulation dwarfs block decompression
+  is pathologically slow (~0.15 MB/s CPU-bound, lzma under translation —
+  an emulation artifact; native extraction speed is normal, see CI stage
+  timings). Local extract-mode smoke was therefore abandoned after the
+  payload had already been proven pre-image.
+- Mount mode on GHA: does NOT come up yet. Ruled OUT: FUSE availability —
+  `/dev/fuse` present, `fuse`/`fusectl` in /proc/filesystems, fusermount3
+  installable (debug run 30219408099). Ruled IN: the driver's daemonize
+  path swallows the error (empty mount log) — boot_smoke now mounts with
+  `-f` (libfuse foreground) so the real error lands in dwarfs-mount.log;
+  argtable3's acceptance of `-f` was unverified at push time — runs
+  30219118995 / 30219407581 are in flight to settle it and expose the
+  underlying mount error. If argtable rejects `-f`, next step is an
+  upstream dwarfs-t foreground option or a fusermount3-verbosity probe.
+  The step stays advisory (`|| true`) until it goes green.
+- What IS proven end-to-end: the payload tree executes relocatably with
+  an empty environment (pre-image smoke in tools/build, both locally and
+  on CI), the image packs and hashes deterministically in shape (33-46 MB
+  depending on closure set), and the manifest fills from the recipe.
 
 ## Known limitations (phase A, honest list)
 
