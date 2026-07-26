@@ -1,0 +1,141 @@
+# Feedstock recipe for inkscape
+# spec 13 §9 + docs/conventions.md in tebako-packages/index
+name: "inkscape"
+kind: toolkit
+summary: "Vector graphics editor (CLI tools) — metanorma's graphics chain"
+
+upstream:
+  url: "https://media.inkscape.org/dl/resources/file/inkscape-1.4.3.tar.xz"
+  sha256: "e83a2c3db570b6c5a1ff0fccfe7098837b3f6bd74b133567937c8a91710ed1d1"
+  version: "1.4.3"
+
+build:
+  system: cmake
+  link_mode: dynamic       # preload-shim exec tier (docs/conventions.md)
+  rpath_origin: true       # $ORIGIN-relative RPATH wired at BUILD time via
+                           # --disable-new-dtags; no patchelf/chrpath anywhere
+  deps: []                 # no feedstock deps
+
+  # Dependency provenance (full rationale in docs/build-notes.md):
+  #  * vcpkg (pinned commit) builds inkscape's non-GNOME deps as shared libs.
+  #  * The GNOME platform stack (gtkmm-3.0 ABI family) comes from ubuntu-24.04
+  #    apt: modern vcpkg ships only gtkmm4/glibmm-2.68 and no libsigc++-2.0 or
+  #    potrace, while inkscape 1.4.x hard-requires gtkmm-3.0 >= 3.24.
+  vcpkg:
+    git: "https://github.com/microsoft/vcpkg.git"
+    commit: "cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3"   # tag 2026.06.24 (annotated tag object 52c9e08c)
+    ports:
+      - gsl
+      - bdwgc
+      - lcms
+      - double-conversion
+      - libpng
+      - zlib
+      - libxml2
+      - libxslt
+      # modular boost: compiled libs we link + header-only modules the
+      # sources include (enumerated from `#include <boost/...>` across the
+      # tree; boost/python is 2geom's off-by-default py2geom, boost/regex
+      # an adaptagrams test — both excluded)
+      - boost-filesystem
+      - boost-stacktrace
+      - boost-algorithm
+      - boost-array
+      - boost-asio
+      - boost-assign
+      - boost-bimap
+      - boost-compute
+      - boost-concept-check
+      - boost-graph
+      - boost-intrusive
+      - boost-iterator
+      - boost-lexical-cast
+      - boost-math
+      - boost-multi-index
+      - boost-numeric-conversion
+      - boost-optional
+      - boost-property-map
+      - boost-ptr-container
+      - boost-range
+      - boost-unordered
+
+  system_packages:          # ubuntu-24.04 (apt) names
+    # toolchain
+    - build-essential
+    - cmake
+    - ninja-build
+    - pkg-config
+    - git
+    - curl
+    - ca-certificates
+    - xz-utils
+    - zip
+    - unzip
+    - tar
+    - autoconf
+    - autoconf-archive
+    - automake
+    - libtool
+    - bison
+    - flex
+    - gperf
+    - nasm
+    - python3
+    - python3-jinja2
+    - ruby                   # feedstock tools
+    # GNOME platform stack + inkscape deps vcpkg cannot serve (see above)
+    - libgtkmm-3.0-dev       # pulls gtk3, glibmm-2.4, pangomm, cairomm, atkmm,
+                             # sigc++-2.0, pango/cairo/harfbuzz/fontconfig/
+                             # freetype/gdk-pixbuf -dev, libX11-dev
+    - libpotrace-dev         # 'potrace' port is absent from vcpkg
+    - libepoxy-dev           # must match the gtk3 build
+
+  cmake:
+    generator: "Ninja"
+    build_type: "Release"
+    options:
+      # --- feature slimming: CLI export (SVG->PDF/PNG) only, no GUI extras ---
+      WITH_NLS: "OFF"               # no translations (drops gettext)
+      WITH_GNU_READLINE: "OFF"      # no interactive shell mode
+      WITH_GSPELL: "OFF"            # GUI spell check
+      WITH_GSOURCEVIEW: "OFF"       # GUI XML editor syntax coloring
+      WITH_LIBCDR: "OFF"            # CorelDRAW import
+      WITH_LIBVISIO: "OFF"          # Visio import
+      WITH_LIBWPG: "OFF"            # WordPerfect import
+      WITH_IMAGE_MAGICK: "OFF"      # raster extension helpers
+      WITH_GRAPHICS_MAGICK: "OFF"   # ditto
+      ENABLE_POPPLER: "OFF"         # PDF *import* only; PDF export is cairo-native
+      ENABLE_POPPLER_CAIRO: "OFF"
+      # --- payload wiring ---
+      WITH_INTERNAL_2GEOM: "ON"     # 2geom is vendored in the release tarball
+      BUILD_SHARED_LIBS: "ON"
+      BUILD_TESTING: "OFF"
+      CMAKE_INSTALL_LIBDIR: "lib"   # flat lib/, no multiarch subdir
+      # old-dtags DT_RPATH so the $ORIGIN chain (exe -> libinkscape_base ->
+      # closure libs) resolves transitively; see docs/build-notes.md §RPATH
+      CMAKE_EXE_LINKER_FLAGS: "-Wl,--disable-new-dtags"
+      CMAKE_SHARED_LINKER_FLAGS: "-Wl,--disable-new-dtags"
+      CMAKE_MODULE_LINKER_FLAGS: "-Wl,--disable-new-dtags"
+
+image:
+  format: dwarfs
+  # mkdwarfs-t from tamatebako/dwarfs-t. The project has NO published GitHub
+  # releases yet (release.yml exists but never produced one as of 2026-07-26),
+  # so tools/stage builds mkdwarfs/dwarfs from this pinned commit unless
+  # $MKDWARFS/$DWARFS point at prebuilt binaries.
+  dwarfs_t:
+    git: "https://github.com/tamatebako/dwarfs-t.git"
+    commit: "05e316313f7259ccca163e8cdb42cb7058bb3c59"  # tag tebako-v0.14.1-18
+
+# x86_64-linux-gnu only for phase A; aarch64-linux-gnu, aarch64-macos and
+# x86_64-macos legs follow once this leg is green.
+platforms:
+  - x86_64-linux-gnu
+
+provides:
+  executables:
+    - {name: "inkscape", path: "/bin/inkscape", version: "1.4.3"}
+  libraries: []
+
+exec_tier: dynamic         # from build.link_mode
+exec_closure: []

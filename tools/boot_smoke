@@ -1,0 +1,79 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Usage: tools/boot_smoke out/<platform>
+#
+# Boot-smoke (conventions.md): run the packaged tool's --version FROM THE
+# IMAGE (mounted via dwarfs-t fuse; dwarfsextract only as a documented
+# degraded fallback), with an EMPTY environment — PATH/LD_LIBRARY_PATH unset —
+# so success proves the $ORIGIN-relative closure is self-sufficient.
+# Then: SVG -> PNG and SVG -> PDF export of fixtures/smoke.svg, and an
+# ldd "not found" sweep over every ELF in the payload.
+
+require_relative "lib/tpkg"
+require "tmpdir"
+
+out_dir = ARGV[0] or Tpkg.die("usage: tools/boot_smoke out/<platform>")
+img = Dir[File.join(out_dir, "*.dwarfs")].first or Tpkg.die("no .dwarfs image in #{out_dir}")
+recipe = Tpkg.recipe(File.join(Tpkg::ROOT, "recipe.yml"))
+tools = Tpkg.ensure_dwarfs_tools(recipe)
+
+mnt = nil
+extracted = nil
+if tools["dwarfs"] && File.exist?("/dev/fuse")
+  mnt = Dir.mktmpdir("tpkg-mnt")
+  # the dwarfs fuse driver daemonizes; poll briefly for the mount to appear
+  spawn(tools["dwarfs"], img, mnt, %i[out err] => File::NULL)
+  30.times { break if File.exist?(File.join(mnt, "bin", "inkscape")); sleep 0.5 }
+  Tpkg.die("dwarfs mount of #{img} did not come up") unless File.exist?(File.join(mnt, "bin", "inkscape"))
+  point = mnt
+  Tpkg.log("mounted #{img} at #{mnt}")
+else
+  Tpkg.warn("no /dev/fuse — DEGRADED smoke: extracting with dwarfsextract (tier allows mount; fuse unavailable here)")
+  extracted = Dir.mktmpdir("tpkg-extract")
+  Tpkg.sh(tools["dwarfsextract"], "-i", img, "-o", extracted)
+  point = extracted
+end
+
+begin
+  bin = File.join(point, "bin", "inkscape")
+  Tpkg.die("#{bin} missing in image") unless File.exist?(bin)
+
+  home = Dir.mktmpdir("tpkg-home")
+  # env -i: empty environment (+ HOME only) — proves $ORIGIN closure.
+  ver, ok = Tpkg.capture("env", "-i", "HOME=#{home}", bin, "--version")
+  Tpkg.die("inkscape --version failed:\n#{ver}") unless ok && ver =~ /Inkscape 1\./
+  Tpkg.log("boot: #{ver.lines.first.strip}")
+
+  # ldd sweep: nothing may resolve to "not found"
+  sweep = Dir[File.join(point, "bin", "*"), File.join(point, "lib", "**", "*.so*")].select { |f| Tpkg.elf?(f) }
+  bad = []
+  sweep.each do |elf|
+    Tpkg.ldd_resolve(elf, []).each { |name, path| bad << "#{elf}: #{name}" if path.nil? && !Tpkg.excluded_lib?(name) }
+  end
+  Tpkg.die("ldd sweep unresolved:\n  #{bad.join("\n  ")}") unless bad.empty?
+  Tpkg.log("ldd sweep: #{sweep.size} ELFs clean")
+
+  fixture = File.join(Tpkg::ROOT, "fixtures", "smoke.svg")
+  Dir.mktmpdir("tpkg-export") do |tmp|
+    png = File.join(tmp, "smoke.png")
+    pdf = File.join(tmp, "smoke.pdf")
+    out1, ok1 = Tpkg.capture("env", "-i", "HOME=#{home}", bin, fixture, "--export-type=png", "--export-filename=#{png}")
+    Tpkg.die("SVG->PNG export failed:\n#{out1}") unless ok1 && File.exist?(png)
+    Tpkg.die("PNG magic mismatch") unless File.open(png, "rb") { |f| f.read(8) } == "\x89PNG\r\n\x1a\n"
+    Tpkg.die("PNG too small (#{File.size(png)} B)") if File.size(png) < 1000
+    Tpkg.log("export: smoke.svg -> PNG (#{File.size(png)} B)")
+
+    out2, ok2 = Tpkg.capture("env", "-i", "HOME=#{home}", bin, fixture, "--export-type=pdf", "--export-filename=#{pdf}")
+    Tpkg.die("SVG->PDF export failed:\n#{out2}") unless ok2 && File.exist?(pdf)
+    Tpkg.die("PDF magic mismatch") unless File.open(pdf, "rb") { |f| f.read(5) } == "%PDF-"
+    Tpkg.log("export: smoke.svg -> PDF (#{File.size(pdf)} B)")
+  end
+ensure
+  if mnt
+    system("fusermount3", "-u", mnt) || system("fusermount", "-u", mnt) || system("umount", mnt)
+    FileUtils.rm_rf(mnt)
+  end
+  FileUtils.rm_rf(extracted) if extracted
+end
+Tpkg.log("BOOT_SMOKE_OK #{File.basename(img)}")

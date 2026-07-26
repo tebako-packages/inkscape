@@ -1,0 +1,5 @@
+out/
+.cache/
+*.dwarfs
+*.dwarfs.sha256
+.DS_Store

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Boot-smoke fixture: shapes, path, gradient and text — a miniature of the
+     SVGs metanorma pushes through the graphics chain. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="160" viewBox="0 0 240 160">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1f6feb"/>
+      <stop offset="1" stop-color="#8957e5"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="224" height="144" rx="10" fill="none" stroke="#333" stroke-width="2"/>
+  <circle cx="60" cy="60" r="30" fill="url(#g)"/>
+  <path d="M110 90 L150 30 L190 90 Z" fill="#2da44e" stroke="#1a7f37" stroke-width="2"/>
+  <text x="120" y="130" font-family="sans-serif" font-size="16" text-anchor="middle" fill="#222">tpkg smoke</text>
+</svg>

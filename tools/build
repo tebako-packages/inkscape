@@ -1,0 +1,175 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Usage: tools/build recipe.yml <version> <platform>
+#
+# fetch (sha256-verified) + vcpkg deps + cmake + install + closure pass.
+# Produces out/<platform>/root — the relocatable payload tree:
+#   root/bin/inkscape          RPATH $ORIGIN/../lib/inkscape (upstream default)
+#   root/lib/inkscape/*.so     inkscape's own libs, RPATH $ORIGIN/..
+#   root/lib/*.so              dependency closure (vcpkg + system), no rpath
+#                              needed: DT_RPATH chain resolves transitively
+#   root/share/inkscape/**     data (auto-found: exe-dir/../share/inkscape)
+#
+# No patchelf/chrpath anywhere: RPATH is wired at BUILD time
+# (-Wl,--disable-new-dtags + upstream's own CMAKE_INSTALL_RPATH).
+
+require_relative "lib/tpkg"
+
+recipe_path, version, platform = ARGV
+Tpkg.die("usage: tools/build recipe.yml <version> <platform>") unless recipe_path && version && platform
+
+recipe = Tpkg.recipe(recipe_path)
+# vcpkg's compiler-hash tracking spawns a detect_compiler try_compile that
+# can wedge under x86_64-on-arm64 emulation; disabling it is harmless on
+# native runners (ABI tags just lose the compiler hash).
+ENV["VCPKG_DISABLE_COMPILER_TRACKING"] ||= "1"
+Tpkg.die("platform #{platform} not in recipe platforms") unless recipe["platforms"].include?(platform)
+Tpkg.die("version #{version} != recipe upstream.version #{recipe.dig('upstream', 'version')}") unless version == recipe.dig("upstream", "version")
+map = Tpkg::PLATFORM_MAP[platform] or Tpkg.die("unknown platform #{platform}")
+triplet = map["vcpkg_triplet"]
+
+out = File.join(Tpkg::ROOT, "out", platform)
+root = File.join(out, "root")
+work = File.join(out, "work")
+FileUtils.mkdir_p([root, work])
+
+# --- 1. system packages -----------------------------------------------------
+pkgs = recipe.dig("build", "system_packages") || []
+if ENV["TPKG_SKIP_APT"] != "1" && system("command -v apt-get >/dev/null 2>&1") && !pkgs.empty?
+  sudo = Process.uid.zero? ? [] : ["sudo"]
+  # retry: concurrent builders can hold the apt/dpkg locks
+  3.times do |attempt|
+    begin
+      Tpkg.sh(*sudo, "apt-get", "update", "-qq")
+      Tpkg.sh(*sudo, "apt-get", "install", "-y", "-qq", *pkgs)
+      break
+    rescue SystemExit
+      raise if attempt == 2
+      Tpkg.warn("apt attempt #{attempt + 1} failed (lock?); retrying in 20s")
+      sleep 20
+    end
+  end
+end
+
+# --- 2. upstream source (sha256-verified) -----------------------------------
+up = recipe["upstream"]
+tarball = Tpkg.fetch(up["url"], File.join(Tpkg.cache_dir, "src", File.basename(up["url"])), up["sha256"])
+src = File.join(work, "src")
+unless File.directory?(src)
+  FileUtils.mkdir_p(src)
+  Tpkg.sh("tar", "-xf", tarball, "-C", src, "--strip-components=1")
+end
+
+# --- 3. vcpkg deps (commit-pinned) -------------------------------------------
+vcpkg = Tpkg.vcpkg_root_for(recipe)
+unless File.executable?(File.join(vcpkg, "vcpkg"))
+  Tpkg.sh(File.join(vcpkg, "bootstrap-vcpkg.sh"), "-disableMetrics", chdir: vcpkg)
+end
+vlib = File.join(vcpkg, "installed", triplet, "lib")
+# vcpkg install is incremental; run it every time so recipe port-list
+# changes take effect (already-installed ports no-op quickly).
+Tpkg.sh(File.join(vcpkg, "vcpkg"), "install", *recipe.dig("build", "vcpkg", "ports"),
+        "--triplet", triplet,
+        "--overlay-triplets=#{File.join(Tpkg::ROOT, 'tools', 'triplets')}",
+        "--clean-buildtrees-after-build",
+        chdir: Tpkg::ROOT)
+
+# --- 4. cmake configure + build + install ------------------------------------
+build_dir = File.join(work, "build")
+cmake = recipe.dig("build", "cmake")
+opts = cmake["options"].map { |k, v| "-D#{k}=#{v}" }
+# vcpkg's toolchain covers find_package, but pkg_check_modules (gsl, bdw-gc,
+# lcms2, …) needs PKG_CONFIG_PATH pointed at the vcpkg installed tree;
+# PKG_CONFIG_PATH prepends to the system defaults, so the apt .pc files
+# (gtkmm-3.0 & co.) still resolve.
+pkg_env = { "PKG_CONFIG_PATH" => [
+  File.join(vcpkg, "installed", triplet, "lib", "pkgconfig"),
+  File.join(vcpkg, "installed", triplet, "share", "pkgconfig")
+].join(":") }
+# 2geom links bare `-lgsl`/`-lgslcblas` (no -L): give the linker the vcpkg
+# lib dir. Appended -D flags override the recipe's same-named ones.
+ld_extra = "-L#{vlib}"
+%w[CMAKE_EXE_LINKER_FLAGS CMAKE_SHARED_LINKER_FLAGS CMAKE_MODULE_LINKER_FLAGS].each do |k|
+  opts << "-D#{k}=#{cmake['options'][k]} #{ld_extra}"
+end
+# always re-run configure: it is incremental and picks up flag/port changes
+Tpkg.sh("cmake", "-S", src, "-B", build_dir,
+        "-G", cmake["generator"],
+        "-DCMAKE_BUILD_TYPE=#{cmake['build_type']}",
+        "-DCMAKE_INSTALL_PREFIX=#{root}",
+        "-DCMAKE_TOOLCHAIN_FILE=#{File.join(vcpkg, 'scripts/buildsystems/vcpkg.cmake')}",
+        "-DVCPKG_TARGET_TRIPLET=#{triplet}",
+        "-DVCPKG_OVERLAY_TRIPLETS=#{File.join(Tpkg::ROOT, 'tools', 'triplets')}",
+        *opts, env: pkg_env)
+Tpkg.sh("cmake", "--build", build_dir, "--parallel", ENV.fetch("TPKG_JOBS", "4"))
+Tpkg.sh("cmake", "--install", build_dir)
+
+# --- 5. closure pass: every ldd-resolved lib (minus glibc set) into lib/ -----
+Tpkg.log("closure pass")
+libd = File.join(root, "lib")
+search = [vlib, libd] # vcpkg first: on SONAME collisions (libpng/zlib) the
+                      # vcpkg build wins — it is the symbol superset we linked
+copied = {}
+seen = {}
+close_lib = lambda do |name, path, queue|
+  next if path.nil? || Tpkg.excluded_lib?(name)
+  real = File.realpath(path)
+  dest = File.join(libd, name)
+  if copied.key?(name)
+    Tpkg.warn("SONAME #{name} already closed from #{copied[name]}, skipping #{real}") if copied[name] != real
+    next
+  end
+  if File.exist?(dest) && File.realpath(dest) == real
+    copied[name] = real # payload's own lib (e.g. lib2geom) — already in place
+    next
+  end
+  FileUtils.cp(real, dest)
+  copied[name] = real
+  queue << dest unless seen[dest]
+end
+queue = Dir[File.join(root, "bin", "*"), File.join(libd, "**", "*.so*")].select { |f| Tpkg.elf?(f) }
+until queue.empty?
+  elf = queue.shift
+  next if seen[elf]
+  seen[elf] = true
+
+  Tpkg.ldd_resolve(elf, search).each { |name, path| close_lib.call(name, path, queue) }
+end
+Tpkg.log("closure: #{copied.size} libs")
+
+# gdk-pixbuf loaders (dlopen'd — ldd of the binaries never sees them):
+# copy the module tree; each loader then joins the closure itself.
+gdk = Dir["/usr/lib/*/gdk-pixbuf-2.0"].first
+if gdk
+  FileUtils.cp_r(gdk, libd)
+  Dir[File.join(libd, "gdk-pixbuf-2.0", "**", "*.so")].select { |f| Tpkg.elf?(f) }.each do |loader|
+    Tpkg.ldd_resolve(loader, search).each { |name, path| close_lib.call(name, path, []) }
+  end
+  Tpkg.log("closure incl. gdk-pixbuf loaders: #{copied.size} libs")
+end
+
+# fontconfig stock config: lets the shim point FONTCONFIG_FILE into the image.
+if File.directory?("/etc/fonts")
+  FileUtils.mkdir_p(File.join(root, "etc"))
+  FileUtils.cp_r("/etc/fonts", File.join(root, "etc"))
+end
+
+# prune payload dead weight the CLI never reads (87 MB of tutorial SVGs)
+FileUtils.rm_rf(File.join(root, "share", "inkscape", "tutorials"))
+
+# --- 6. strip + pre-image smoke (no LD_LIBRARY_PATH: $ORIGIN must suffice) ---
+Tpkg.sh("sh", "-c", "find #{Shellwords.escape(root)} -name '*.so*' -type f -exec strip --strip-unneeded {} +")
+Tpkg.sh("strip", File.join(root, "bin", "inkscape"))
+require "tmpdir"
+home = Dir.mktmpdir
+out_txt, ok = Tpkg.capture(File.join(root, "bin", "inkscape"), "--version", env: { "HOME" => home })
+Tpkg.die("pre-image smoke failed:\n#{out_txt}") unless ok
+Tpkg.log("pre-image smoke: #{out_txt.lines.first&.strip}")
+
+File.write(File.join(out, "build-meta.json"), JSON.pretty_generate({
+  "name" => recipe["name"], "version" => version, "platform" => platform,
+  "vcpkg_triplet" => triplet, "closure_libs" => copied.size,
+  "built_at" => Time.now.utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+}))
+Tpkg.log("payload tree ready: #{root}")

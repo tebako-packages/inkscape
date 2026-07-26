@@ -1,0 +1,25 @@
+schema_version: 1
+# Payload manifest template for inkscape (spec 03; filled from recipe.yml by tools/stage)
+identity:
+  schema_version: 1
+  kind: toolkit
+  name: "inkscape"
+  version: "@@VERSION@@"
+  producer: {tool: feedstock-build, tool_version: "1"}
+  created: "@@CREATED@@"
+  source: {src_sha256: "@@UPSTREAM_SHA256@@", commit: "@@FEEDSTOCK_SHA@@", builder: "gha"}
+  digest:
+    tree_hash: ""        # merkle root when the CAS lands (spec 03)
+    blob_sha256: "@@BLOB_SHA256@@"
+  signing: {state: unsigned}
+  encryption: {state: none}
+  annotations: {}
+provides:
+  executables:
+    - {name: "inkscape", path: "/bin/inkscape", version: "@@VERSION@@"}
+  libraries: []
+exec_tier: dynamic
+exec_closure: []
+platforms: [x86_64-linux-gnu, aarch64-linux-gnu, aarch64-macos, x86_64-macos]
+capabilities: {exec: true, read: true}
+requires: []             # toolkit deps: {kind: toolkit, name, constraint, mount}
