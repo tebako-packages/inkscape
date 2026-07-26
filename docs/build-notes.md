@@ -168,6 +168,9 @@ build, an mtime watchdog that kill/resumes stuck cycles. Docker host-mount
   pinned commit) → image **33.2 MB** (sha256 `9c772a214f6d8335…`). Image
   size differs from local because the closure set tracks the build
   environment's apt revisions (98 libs local vs 87 on the runner).
+  Rebuilds are NOT bit-reproducible yet (run 30217572017 produced the
+  same 33.2 MB with sha256 `4d8d58d8beecbbf6…`) — timestamps, apt drift
+  and image metadata; a reproducibility pass is follow-up work.
 
 **Boot-smoke:** mount + `env -i inkscape --version` + SVG→PNG/PDF export +
 ldd sweep: see run logs; local extract-mode evidence below.
