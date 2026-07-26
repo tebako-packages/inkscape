@@ -20,6 +20,11 @@ root = File.join(out_dir, "root")
 Tpkg.die("payload tree #{root} missing — run tools/build first") unless File.directory?(root)
 
 tools = Tpkg.ensure_dwarfs_tools(recipe)
+# ship the mounter tools alongside the image: boot_smoke (and users) get a
+# known-good dwarfs-t binary set for this exact payload
+tbin = File.join(out_dir, "dwarfs-t-bin")
+FileUtils.mkdir_p(tbin)
+tools.each_value { |t| FileUtils.cp(t, tbin) if t && File.executable?(t) }
 img = File.join(out_dir, "inkscape-#{version}-#{platform}.dwarfs")
 FileUtils.rm_f(img)
 Tpkg.sh(tools["mkdwarfs"], "-i", root, "-o", img, "--force")

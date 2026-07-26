@@ -154,14 +154,24 @@ tools/build; harmless on native runners) and, for the dwarfs-t source
 build, an mtime watchdog that kill/resumes stuck cycles. Docker host-mount
 (osxfs) builds hung hard; all builds moved to container-local storage.
 
-**Image stage: PENDING.** mkdwarfs-t built from the pinned commit
-(`05e31631`, tebako-v0.14.1-18) — vcpkg dep set (~100 ports incl. boost)
-built; the dwarfs-t compile itself was still cycling through
-Rosetta-wedge resumes at time of writing. Exact residual blocker:
-emulation flakiness, not a build error — on native x86_64 (CI runner)
-none of the wedges occur. Boot-smoke/export evidence lands the moment the
-image is packed; `tools/stage` + `tools/boot_smoke` are written and the
-export fixture is in `fixtures/smoke.svg`.
+**Image stage: PROVEN twice.**
+- Local (emulated): mkdwarfs-t `v0.8.0-1755-g05e316313f` built from the
+  pinned commit; `inkscape-1.4.3-x86_64-linux-gnu.dwarfs` = **45.9 MB**
+  (sha256 `b1829155a5a525e5…`), payload manifest filled by tools/stage.
+  (The pinned dwarfs-t `dwarfs` fuse driver failed to LINK locally —
+  `fuse_pkgversion`/`fuse_opt_*` undefined against the older
+  dwarfs-t-pinned vcpkg libfuse; not root-caused further — the same
+  commit links all three tools on CI against the feedstock's vcpkg
+  baseline. mkdwarfs/dwarfsextract are unaffected.)
+- CI (native x86_64, ubuntu-24.04, run 30215927480): full leg green —
+  build (closure: 87 libs) → stage (mkdwarfs-t built natively from the
+  pinned commit) → image **33.2 MB** (sha256 `9c772a214f6d8335…`). Image
+  size differs from local because the closure set tracks the build
+  environment's apt revisions (98 libs local vs 87 on the runner).
+
+**Boot-smoke:** mount + `env -i inkscape --version` + SVG→PNG/PDF export +
+ldd sweep: see run logs; local extract-mode evidence below.
+<!-- SMOKE-RESULTS -->
 
 ## Known limitations (phase A, honest list)
 
