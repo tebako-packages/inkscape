@@ -127,6 +127,18 @@ module Tpkg
     bindir = File.join(dest, "bin")
     mkdwarfs = File.join(bindir, "mkdwarfs")
     unless File.executable?(mkdwarfs)
+      # dwarfs-t manpage codegen needs python mistletoe; ubuntu-24.04's
+      # PEP 668 blocks plain `pip3 install` (externally-managed-environment)
+      have_mistletoe = -> { system("python3", "-c", "import mistletoe", %i[out err] => File::NULL) }
+      unless have_mistletoe.call
+        sudo = Process.uid.zero? ? [] : ["sudo"]
+        system(*sudo, "apt-get", "install", "-y", "-qq", "python3-mistletoe") if system("command -v apt-get >/dev/null 2>&1")
+        unless have_mistletoe.call
+          system("pip3", "install", "--break-system-packages", "mistletoe") ||
+            system("pip3", "install", "--user", "mistletoe") ||
+            die("could not install python mistletoe (dwarfs-t manpage codegen needs it)")
+        end
+      end
       log("building mkdwarfs-t from pinned source #{pin['commit'][0, 12]}… (no published releases)")
       src = git_pinned(pin["git"], pin["commit"], File.join(dest, "src"))
       triplet = ENV.fetch("TPKG_DWARFS_TRIPLET", "x64-linux")
