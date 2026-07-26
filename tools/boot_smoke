@@ -18,14 +18,25 @@ img = Dir[File.join(out_dir, "*.dwarfs")].first or Tpkg.die("no .dwarfs image in
 recipe = Tpkg.recipe(File.join(Tpkg::ROOT, "recipe.yml"))
 tools = Tpkg.ensure_dwarfs_tools(recipe)
 
+# the dwarfs fuse driver needs fusermount3 (setuid helper); CI runners and
+# slim containers have /dev/fuse but no fuse3 package
+if !system("command -v fusermount3 >/dev/null 2>&1") && system("command -v apt-get >/dev/null 2>&1")
+  sudo = Process.uid.zero? ? [] : ["sudo"]
+  Tpkg.sh(*sudo, "apt-get", "install", "-y", "-qq", "fuse3")
+end
+
 mnt = nil
 extracted = nil
 if tools["dwarfs"] && File.exist?("/dev/fuse")
   mnt = Dir.mktmpdir("tpkg-mnt")
   # the dwarfs fuse driver daemonizes; poll briefly for the mount to appear
-  spawn(tools["dwarfs"], img, mnt, %i[out err] => File::NULL)
-  30.times { break if File.exist?(File.join(mnt, "bin", "inkscape")); sleep 0.5 }
-  Tpkg.die("dwarfs mount of #{img} did not come up") unless File.exist?(File.join(mnt, "bin", "inkscape"))
+  dwlog = File.join(out_dir, "dwarfs-mount.log")
+  spawn(tools["dwarfs"], img, mnt, %i[out err] => dwlog)
+  60.times { break if File.exist?(File.join(mnt, "bin", "inkscape")); sleep 0.5 }
+  unless File.exist?(File.join(mnt, "bin", "inkscape"))
+    Tpkg.warn(File.read(dwlog)) if File.exist?(dwlog)
+    Tpkg.die("dwarfs mount of #{img} did not come up")
+  end
   point = mnt
   Tpkg.log("mounted #{img} at #{mnt}")
 else
