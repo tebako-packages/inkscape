@@ -17,8 +17,8 @@ module Tpkg
   PLATFORM_MAP = {
     "x86_64-linux-gnu"  => { "runner" => "ubuntu-24.04",     "vcpkg_triplet" => "x64-linux-dynamic" },
     "aarch64-linux-gnu" => { "runner" => "ubuntu-24.04-arm", "vcpkg_triplet" => "arm64-linux-dynamic" },
-    "aarch64-macos"     => { "runner" => "macos-14",         "vcpkg_triplet" => "arm64-osx-dynamic" },
-    "x86_64-macos"      => { "runner" => "macos-13",         "vcpkg_triplet" => "x64-osx-dynamic" }
+    "aarch64-macos"     => { "runner" => "macos-14",         "vcpkg_triplet" => "arm64-osx-static" },
+    "x86_64-macos"      => { "runner" => "macos-13",         "vcpkg_triplet" => "x64-osx-static" }
   }.freeze
 
   # The glibc family + the program loader stay OUTSIDE the closure: they must
@@ -30,6 +30,18 @@ module Tpkg
     libresolv.so.2 libutil.so.1 libanl.so.1 libnsl.so.1
   ].freeze
   CLOSURE_EXCLUDE_RE = /\Alibnss_|\Alinux-gate/ .freeze
+
+  # macOS closure exclusions (the libSystem family — the macOS counterpart of
+  # the linux glibc rule): anything the OS itself ships under /usr/lib or
+  # /System/Library stays outside the closure. That includes libc++.1.dylib /
+  # libc++abi.dylib — the libstdc++/libgcc_s equivalents — which on macOS are
+  # part of the OS (dyld shared cache, ABI-stable), unlike linux where
+  # libstdc++ is a toolchain package and rides in the closure.
+  MACOS_SYSTEM_REF = %r{\A/(usr/lib|System/Library)/}.freeze
+  # Prefixes a dylib reference may have to count as closure material on macOS.
+  # Single supplier (Homebrew), so this is exactly the brew tree(s):
+  # /opt/homebrew on arm64, /usr/local (minus /usr/lib) on x86_64.
+  MACOS_SUPPLIER_REF = %r{\A/(opt/homebrew|usr/local)/}.freeze
 
   module_function
 
@@ -111,15 +123,38 @@ module Tpkg
     dir
   end
 
-  # Locate or build mkdwarfs/dwarfs from tamatebako/dwarfs-t.
-  # Order: $MKDWARFS env → tool cache → pinned source build.
-  # (No published dwarfs-t releases exist to download yet — see build-notes.)
-  def ensure_dwarfs_tools(recipe)
+  # Locate or obtain the image tools (mkdwarfs + a mount/extract helper).
+  # Order: $MKDWARFS env → libtfs release assets (macOS legs) → tool cache →
+  # pinned dwarfs-t source build (linux legs; no published dwarfs-t releases
+  # exist — see build-notes). The macOS legs use tamatebako/libtfs release
+  # binaries (sha256-pinned in recipe image.libtfs): dwarfs-t has no macOS
+  # releases and building it on macOS is untested, while libtfs ships a
+  # static mkdwarfs plus tebakofs (multi-backend CLI; `tebakofs extract`
+  # replaces dwarfsextract for the FUSE-less degraded boot-smoke).
+  def ensure_dwarfs_tools(recipe, platform: nil)
     if ENV["MKDWARFS"] && File.executable?(ENV["MKDWARFS"])
       log("using $MKDWARFS=#{ENV['MKDWARFS']}")
       return { "mkdwarfs" => ENV["MKDWARFS"],
                "dwarfs" => ENV["DWARFS"],
-               "dwarfsextract" => ENV["DWARFSEXTRACT"] }.compact
+               "dwarfsextract" => ENV["DWARFSEXTRACT"],
+               "tebakofs" => ENV["TEBAKOFS"] }.compact
+    end
+
+    if platform&.end_with?("-macos")
+      spec = recipe.fetch("image").fetch("libtfs")
+      arch = { "aarch64-macos" => "arm64", "x86_64-macos" => "x86_64" }.fetch(platform)
+      dir = File.join(cache_dir, "tools", "libtfs-#{spec['release']}")
+      FileUtils.mkdir_p(dir)
+      tools = {}
+      %w[mkdwarfs tebakofs].each do |t|
+        asset = "#{t}-macos-#{arch}"
+        want = spec.fetch("sha256").fetch(asset)
+        bin = Tpkg.fetch("https://github.com/tamatebako/libtfs/releases/download/#{spec['release']}/#{asset}",
+                         File.join(dir, asset), want)
+        FileUtils.chmod(0o755, bin)
+        tools[t] = bin
+      end
+      return tools
     end
 
     pin = recipe.fetch("image").fetch("dwarfs_t")
@@ -199,5 +234,166 @@ module Tpkg
 
   def excluded_lib?(name)
     CLOSURE_EXCLUDE.include?(name) || name.match?(CLOSURE_EXCLUDE_RE)
+  end
+
+  # --- macOS (Mach-O) closure ------------------------------------------------
+
+  # Mach-O magics (byte strings): 64/32-bit, both endians, + fat universal.
+  MACHO_MAGICS = ["\xcf\xfa\xed\xfe", "\xfe\xed\xfa\xcf", "\xce\xfa\xed\xfe", "\xfe\xed\xfa\xce", "\xca\xfe\xba\xbe"].map(&:b).freeze
+
+  def macho?(path)
+    return false unless File.file?(path) && !File.symlink?(path)
+
+    magic = File.open(path, "rb") { |f| f.read(4) }
+    return false if magic.nil? || magic.bytesize < 4
+
+    MACHO_MAGICS.include?(magic)
+  rescue Errno::EACCES, Errno::ENOENT
+    false
+  end
+
+  # All LC_LOAD_DYLIB names + the install name (first entry for dylibs).
+  def otool_refs(path)
+    out, ok = capture("otool", "-L", path)
+    die("otool -L failed on #{path}:\n#{out}") unless ok
+    out.each_line.drop(1).filter_map do |line|
+      line = line.strip.sub(/\s+\(.*\)\s*$/, "")
+      line unless line.empty?
+    end
+  end
+
+  def otool_rpaths(path)
+    out, ok = capture("otool", "-l", path)
+    die("otool -l failed on #{path}:\n#{out}") unless ok
+    lines = out.each_line.to_a
+    rpaths = []
+    lines.each_with_index do |line, i|
+      rpaths << Regexp.last_match(1) if line.strip == "cmd LC_RPATH" && lines[i + 2].to_s =~ /path (\S+) \(offset/
+    end
+    rpaths
+  end
+
+  # Fixpoint otool walk of the payload tree, closing over every non-system
+  # dylib reference into lib/. Rules (documented in docs/build-notes.md):
+  #  * /usr/lib + /System/Library refs stay out (the libSystem family).
+  #  * Everything else must come from the single supplier (brew tree) and is
+  #    copied FLAT into lib/ as <leaf>; a leaf colliding with different
+  #    content is an error, not a choice (single supplier ⇒ none expected).
+  #  * After copying, every payload Mach-O gets its supplier-absolute refs
+  #    rewritten to @rpath/<leaf> and every closure dylib gets
+  #    -id @rpath/<leaf> (install_name_tool — the macOS bundling step; the
+  #    no-patchelf rule targets RPATH wiring, which stays build-time).
+  # Idempotent: re-running wipes the previous run's copies first (their
+  # install names were rewritten in place, so they no longer compare equal
+  # to the brew originals) — the stamp file records what we copied.
+  # Returns {leaf => source realpath}.
+  def macos_closure(root, stamp: nil)
+    libd = File.join(root, "lib")
+    FileUtils.mkdir_p(libd)
+    if stamp && File.exist?(stamp)
+      File.read(stamp).split("\n").each { |leaf| FileUtils.rm_f(File.join(libd, leaf)) }
+    end
+    copied = {} # leaf => realpath of the supplier dylib it came from
+    system_refs = {}
+    payload_leaf = lambda do |leaf|
+      File.exist?(File.join(libd, leaf)) || File.exist?(File.join(libd, "inkscape", leaf))
+    end
+    dylibish = ->(f) { f.end_with?(".dylib", ".so") }
+
+    seeds = Dir[File.join(root, "bin", "*"), File.join(libd, "**", "*.{dylib,so}")].select { |f| macho?(f) }
+    queue = seeds.dup
+    seen = {}
+    until queue.empty?
+      f = queue.shift
+      next if seen[f]
+
+      seen[f] = true
+      otool_refs(f).each_with_index do |ref, i|
+        next if i.zero? && dylibish.call(f) # install name, not a dependency
+
+        case ref
+        when MACOS_SYSTEM_REF
+          system_refs[ref] = true
+        when MACOS_SUPPLIER_REF
+          leaf = File.basename(ref)
+          die("absolute ref to missing supplier lib: #{ref} (referenced by #{f})") unless File.exist?(ref)
+          real = File.realpath(ref)
+          dest = File.join(libd, leaf)
+          if copied.key?(leaf)
+            warn("closure leaf #{leaf} also referenced as #{ref}") unless copied[leaf] == real
+          elsif File.exist?(dest)
+            if FileUtils.compare_file(dest, real)
+              copied[leaf] = real # identical copy from a previous run — re-walked via seeds
+            else
+              # payload's own lib with the same leaf (e.g. lib2geom) — single
+              # supplier makes this a hard error: two different dylibs, one name
+              die("closure leaf collision: #{ref} vs payload's own #{dest}")
+            end
+          else
+            FileUtils.cp(real, dest)
+            FileUtils.chmod(0o755, dest) # brew bottles are read-only (0444);
+                                         # strip/install_name_tool/codesign need +w
+            copied[leaf] = real
+            queue << dest if macho?(dest)
+          end
+        when /\A@rpath\/(.+)/
+          leaf = Regexp.last_match(1)
+          next if payload_leaf.call(leaf) || copied.key?(leaf)
+          die("unresolvable @rpath ref #{ref} in #{f} (not in payload, not a supplier lib)")
+        when /\A(@loader_path|@executable_path)\//
+          next # intra-payload reference, resolved relative to its loader
+        else
+          die("unexpected dylib ref form #{ref} in #{f}")
+        end
+      end
+    end
+
+    # rewrite pass: supplier-absolute refs -> @rpath/<leaf>, ids -> @rpath/<leaf>
+    edited = Dir[File.join(root, "bin", "*"), File.join(libd, "**", "*.{dylib,so}")].select { |f| macho?(f) }
+    edited.each do |f|
+      args = []
+      otool_refs(f).each_with_index do |ref, i|
+        if i.zero? && dylibish.call(f)
+          args += ["-id", "@rpath/#{File.basename(f)}"] if ref.match?(MACOS_SUPPLIER_REF)
+          next
+        end
+        args += ["-change", ref, "@rpath/#{File.basename(ref)}"] if ref.match?(MACOS_SUPPLIER_REF)
+      end
+      sh("install_name_tool", *args, f, quiet: true) unless args.empty?
+    end
+
+    # verification pass: nothing outside system + @rpath/payload may remain
+    leaks = []
+    edited.each do |f|
+      otool_refs(f).each_with_index do |ref, i|
+        next if i.zero? && dylibish.call(f) # install name, not a dependency
+        next if ref.match?(MACOS_SYSTEM_REF) || ref.start_with?("@loader_path/", "@executable_path/")
+        if (m = ref.match(/\A@rpath\/(.+)/))
+          leaf = m[1]
+          leaks << "#{f}: unresolved @rpath/#{leaf}" unless payload_leaf.call(leaf) || copied.key?(leaf)
+        else
+          leaks << "#{f}: #{ref}"
+        end
+      end
+    end
+    die("macOS closure leaks (non-system refs outside the payload):\n  #{leaks.join("\n  ")}") unless leaks.empty?
+    File.write(stamp, copied.keys.sort.join("\n") + "\n") if stamp
+    log("macOS closure: #{copied.size} supplier libs, #{system_refs.size} system refs excluded")
+    copied
+  end
+
+  # ad-hoc re-sign every Mach-O in the tree. Mandatory on arm64 after
+  # install_name_tool / strip (both invalidate the link-time ad-hoc
+  # signature; unsigned arm64 binaries are killed at exec).
+  def codesign_tree(root)
+    files = Dir[File.join(root, "**", "*")].select { |f| macho?(f) }
+    files.each { |f| sh("codesign", "--force", "--sign", "-", f, quiet: true) }
+    log("codesign: ad-hoc re-signed #{files.size} Mach-O files")
+  end
+
+  def brew_prefix(formula)
+    args = ["brew", "--prefix", *(formula ? [formula] : [])]
+    out, ok = capture(*args)
+    ok ? out.strip : nil
   end
 end

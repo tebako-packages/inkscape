@@ -17,10 +17,14 @@ build:
   deps: []                 # no feedstock deps
 
   # Dependency provenance (full rationale in docs/build-notes.md):
-  #  * vcpkg (pinned commit) builds inkscape's non-GNOME deps as shared libs.
-  #  * The GNOME platform stack (gtkmm-3.0 ABI family) comes from ubuntu-24.04
-  #    apt: modern vcpkg ships only gtkmm4/glibmm-2.68 and no libsigc++-2.0 or
-  #    potrace, while inkscape 1.4.x hard-requires gtkmm-3.0 >= 3.24.
+  #  * vcpkg (pinned commit) builds inkscape's non-GNOME deps — shared libs on
+  #    linux, static on macOS (arm64-osx-static: they link into the binaries
+  #    and drop out of the dylib closure entirely).
+  #  * The GNOME platform stack (gtkmm-3.0 ABI family) comes from the OS
+  #    package manager — ubuntu-24.04 apt on linux, Homebrew bottles on macOS:
+  #    modern vcpkg ships only gtkmm4/glibmm-2.68 and no libsigc++-2.0 or
+  #    potrace, while inkscape 1.4.x hard-requires gtkmm-3.0 >= 3.24. One
+  #    self-consistent supplier per platform, same rule both legs.
   vcpkg:
     git: "https://github.com/microsoft/vcpkg.git"
     commit: "cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3"   # tag 2026.06.24 (annotated tag object 52c9e08c)
@@ -90,6 +94,24 @@ build:
     - libpotrace-dev         # 'potrace' port is absent from vcpkg
     - libepoxy-dev           # must match the gtk3 build
 
+  brew_packages:            # macOS legs: Homebrew bottles are the macOS
+                            # platform-stack supplier (apt counterpart) — ONE
+                            # self-consistent source, same rule as linux
+    # toolchain (preinstalled on macos-14 runners; idempotent)
+    - cmake
+    - ninja
+    - pkg-config
+    - ruby                   # feedstock tools need >= 2.7; macOS system ruby is 2.6
+    # GNOME platform stack — the gtkmm3 ABI family. gtkmm3 pulls the versioned
+    # formulae glibmm@2.66 (glibmm-2.4 ABI), cairomm@1.14, pangomm@2.46,
+    # atkmm@2.28, libsigc++@2 + gtk+3/pango/cairo/harfbuzz/fontconfig/
+    # gdk-pixbuf — the same set apt's libgtkmm-3.0-dev serves on linux.
+    - gtkmm3
+    - libepoxy               # must match the gtk3 build (same supplier: brew)
+    - potrace                # 'potrace' port is absent from vcpkg
+    - gettext                # keg-only; upstream's FindIntl is unconditional
+    - libomp                 # WITH_OPENMP parity with the linux leg (keg-only)
+
   cmake:
     generator: "Ninja"
     build_type: "Release"
@@ -117,20 +139,46 @@ build:
       CMAKE_SHARED_LINKER_FLAGS: "-Wl,--disable-new-dtags"
       CMAKE_MODULE_LINKER_FLAGS: "-Wl,--disable-new-dtags"
 
+  # merged over build.cmake.options for the named platform
+  platform_cmake_options:
+    aarch64-macos:
+      # ld64 has no --disable-new-dtags (GNU ld only). macOS @rpath resolution
+      # is transitive down the load chain BY DESIGN, so upstream's build-time
+      # rpaths (exe: @loader_path/../lib/inkscape, libinkscape_base:
+      # @loader_path/..) plus this one cover the flat closure in lib/ — the
+      # macOS form of the same wiring, still zero post-build RPATH edits.
+      CMAKE_EXE_LINKER_FLAGS: "-Wl,-rpath,@loader_path/../lib"
+      CMAKE_SHARED_LINKER_FLAGS: "-Wl,-rpath,@loader_path/../lib"
+      CMAKE_MODULE_LINKER_FLAGS: "-Wl,-rpath,@loader_path/../lib"
+
 image:
   format: dwarfs
+  # artifact extension per platform: .dwarfs for linux legs; .tfs (tebako fs
+  # image — same DwarFS format, libtfs tooling/branding) for the macOS legs.
+  extension:
+    default: dwarfs
+    aarch64-macos: tfs
   # mkdwarfs-t from tamatebako/dwarfs-t. The project has NO published GitHub
   # releases yet (release.yml exists but never produced one as of 2026-07-26),
   # so tools/stage builds mkdwarfs/dwarfs from this pinned commit unless
-  # $MKDWARFS/$DWARFS point at prebuilt binaries.
+  # $MKDWARFS/$DWARFS point at prebuilt binaries. (linux legs)
   dwarfs_t:
     git: "https://github.com/tamatebako/dwarfs-t.git"
     commit: "05e316313f7259ccca163e8cdb42cb7058bb3c59"  # tag tebako-v0.14.1-18
+  # macOS legs: mkdwarfs + tebakofs from tamatebako/libtfs releases (static
+  # binaries, libSystem+libc++ only). sha256 pins from the release's
+  # SHA256SUMS, re-verified on first fetch by tools/stage.
+  libtfs:
+    release: "v0.13.0"
+    sha256:
+      mkdwarfs-macos-arm64: "77c2d2c395a37a739ac73711ceb1011efdf2f8200aab1df4961ea0cff3fc959c"
+      tebakofs-macos-arm64: "f29a5e19b5c01ef5639099a65f12176f9d1afa36e3df3c03691568d09cf89357"
 
-# x86_64-linux-gnu only for phase A; aarch64-linux-gnu, aarch64-macos and
-# x86_64-macos legs follow once this leg is green.
+# phase A: x86_64-linux-gnu + aarch64-macos (macOS dogfood leg);
+# aarch64-linux-gnu and x86_64-macos legs follow.
 platforms:
   - x86_64-linux-gnu
+  - aarch64-macos
 
 provides:
   executables:

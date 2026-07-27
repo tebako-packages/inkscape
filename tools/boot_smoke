@@ -14,25 +14,32 @@ require_relative "lib/tpkg"
 require "tmpdir"
 
 out_dir = ARGV[0] or Tpkg.die("usage: tools/boot_smoke out/<platform>")
-img = Dir[File.join(out_dir, "*.dwarfs")].first or Tpkg.die("no .dwarfs image in #{out_dir}")
+img = Dir[File.join(out_dir, "*.{dwarfs,tfs}")].first or Tpkg.die("no .dwarfs/.tfs image in #{out_dir}")
+platform = File.basename(img).sub(/\Ainkscape-[\d.]+-/, "").sub(/\.(dwarfs|tfs)\z/, "")
+macos = platform.end_with?("-macos")
 recipe = Tpkg.recipe(File.join(Tpkg::ROOT, "recipe.yml"))
-tools = Tpkg.ensure_dwarfs_tools(recipe)
-# prefer the dwarfs-t binaries staged next to the image (same run's build)
-%w[mkdwarfs dwarfs dwarfsextract].each do |t|
+tools = Tpkg.ensure_dwarfs_tools(recipe, platform: platform)
+# prefer the image tools staged next to the image (same run's build/download)
+%w[mkdwarfs dwarfs dwarfsextract tebakofs].each do |t|
   staged = File.join(out_dir, "dwarfs-t-bin", t)
   tools[t] = staged if File.executable?(staged)
+end
+# the staged macOS tools keep their release asset names (mkdwarfs-macos-arm64)
+Dir[File.join(out_dir, "dwarfs-t-bin", "*-macos-*")].each do |f|
+  t = File.basename(f).sub(/-macos-(arm64|x86_64)\z/, "")
+  tools[t] = f if File.executable?(f)
 end
 
 # the dwarfs fuse driver needs fusermount3 (setuid helper); CI runners and
 # slim containers have /dev/fuse but no fuse3 package
-if !system("command -v fusermount3 >/dev/null 2>&1") && system("command -v apt-get >/dev/null 2>&1")
+if !macos && !system("command -v fusermount3 >/dev/null 2>&1") && system("command -v apt-get >/dev/null 2>&1")
   sudo = Process.uid.zero? ? [] : ["sudo"]
   Tpkg.sh(*sudo, "apt-get", "install", "-y", "-qq", "fuse3")
 end
 
 mnt = nil
 extracted = nil
-if tools["dwarfs"] && File.exist?("/dev/fuse")
+if !macos && tools["dwarfs"] && File.exist?("/dev/fuse")
   mnt = Dir.mktmpdir("tpkg-mnt")
   # foreground (-f, honored by libfuse): keeps driver output on the log and
   # the process under our control; poll briefly for the mount to appear
@@ -47,9 +54,19 @@ if tools["dwarfs"] && File.exist?("/dev/fuse")
   point = mnt
   Tpkg.log("mounted #{img} at #{mnt}")
 else
-  Tpkg.warn("no /dev/fuse — DEGRADED smoke: extracting with dwarfsextract (tier allows mount; fuse unavailable here)")
   extracted = Dir.mktmpdir("tpkg-extract")
-  Tpkg.sh(tools["dwarfsextract"], "-i", img, "-o", extracted)
+  if tools["dwarfsextract"]
+    Tpkg.warn("no usable fuse mount — DEGRADED smoke: extracting with dwarfsextract (tier allows mount; fuse unavailable here)")
+    Tpkg.sh(tools["dwarfsextract"], "-i", img, "-o", extracted)
+  elsif tools["tebakofs"]
+    Tpkg.warn("no usable fuse mount — DEGRADED smoke: extracting with tebakofs (libtfs; tier allows mount; fuse unavailable here)")
+    Tpkg.sh(tools["tebakofs"], "extract", "-d", extracted, img)
+    # tebakofs v0.13.0 extract writes every file 0644 (modes from the image
+    # are not applied) — restore exec bits so the payload's binaries run.
+    FileUtils.chmod(0o755, Dir[File.join(extracted, "bin", "*")])
+  else
+    Tpkg.die("no fuse and no extract tool (dwarfsextract/tebakofs) available")
+  end
   point = extracted
 end
 
@@ -63,14 +80,36 @@ begin
   Tpkg.die("inkscape --version failed:\n#{ver}") unless ok && ver =~ /Inkscape 1\./
   Tpkg.log("boot: #{ver.lines.first.strip}")
 
-  # ldd sweep: nothing may resolve to "not found"
-  sweep = Dir[File.join(point, "bin", "*"), File.join(point, "lib", "**", "*.so*")].select { |f| Tpkg.elf?(f) }
+  # dependency sweep: nothing unresolved, and nothing outside the closure
   bad = []
-  sweep.each do |elf|
-    Tpkg.ldd_resolve(elf, []).each { |name, path| bad << "#{elf}: #{name}" if path.nil? && !Tpkg.excluded_lib?(name) }
+  if macos
+    # otool sweep: refs must be system (/usr/lib, /System) or @rpath leaves
+    # present inside the payload — any residual brew-tree path is a leak.
+    sweep = Dir[File.join(point, "bin", "*"), File.join(point, "lib", "**", "*.{dylib,so}")].select { |f| Tpkg.macho?(f) }
+    sweep.each do |f|
+      Tpkg.otool_refs(f).each_with_index do |ref, i|
+        next if i.zero? && f.end_with?(".dylib", ".so") # install name
+        next if ref.match?(Tpkg::MACOS_SYSTEM_REF) || ref.start_with?("@loader_path/", "@executable_path/")
+        if (m = ref.match(/\A@rpath\/(.+)/))
+          leaf = m[1]
+          bad << "#{f}: unresolved @rpath/#{leaf}" unless File.exist?(File.join(point, "lib", leaf)) ||
+                                                         File.exist?(File.join(point, "lib", "inkscape", leaf))
+        else
+          bad << "#{f}: #{ref}"
+        end
+      end
+    end
+    Tpkg.die("otool sweep failed (leak/unresolved):\n  #{bad.join("\n  ")}") unless bad.empty?
+    Tpkg.log("otool sweep: #{sweep.size} Mach-O files clean (no brew leaks beyond the closure)")
+  else
+    # ldd sweep: nothing may resolve to "not found"
+    sweep = Dir[File.join(point, "bin", "*"), File.join(point, "lib", "**", "*.so*")].select { |f| Tpkg.elf?(f) }
+    sweep.each do |elf|
+      Tpkg.ldd_resolve(elf, []).each { |name, path| bad << "#{elf}: #{name}" if path.nil? && !Tpkg.excluded_lib?(name) }
+    end
+    Tpkg.die("ldd sweep unresolved:\n  #{bad.join("\n  ")}") unless bad.empty?
+    Tpkg.log("ldd sweep: #{sweep.size} ELFs clean")
   end
-  Tpkg.die("ldd sweep unresolved:\n  #{bad.join("\n  ")}") unless bad.empty?
-  Tpkg.log("ldd sweep: #{sweep.size} ELFs clean")
 
   fixture = File.join(Tpkg::ROOT, "fixtures", "smoke.svg")
   Dir.mktmpdir("tpkg-export") do |tmp|
@@ -78,7 +117,9 @@ begin
     pdf = File.join(tmp, "smoke.pdf")
     out1, ok1 = Tpkg.capture("env", "-i", "HOME=#{home}", bin, fixture, "--export-type=png", "--export-filename=#{png}")
     Tpkg.die("SVG->PNG export failed:\n#{out1}") unless ok1 && File.exist?(png)
-    Tpkg.die("PNG magic mismatch") unless File.open(png, "rb") { |f| f.read(8) } == "\x89PNG\r\n\x1a\n"
+    # .b: the file read is ASCII-8BIT; a bare "\x89" literal is UTF-8, and
+    # == across incompatible encodings is false even with identical bytes.
+    Tpkg.die("PNG magic mismatch") unless File.open(png, "rb") { |f| f.read(8) } == "\x89PNG\r\n\x1a\n".b
     Tpkg.die("PNG too small (#{File.size(png)} B)") if File.size(png) < 1000
     Tpkg.log("export: smoke.svg -> PNG (#{File.size(png)} B)")
 

@@ -35,6 +35,11 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Toolchain ruby (macOS)
+        if: runner.os == 'macOS'
+        # feedstock tools need ruby >= 3 (endless defs in tools/lib/tpkg.rb);
+        # macOS system ruby is 2.6. brew puts /opt/homebrew/bin first in PATH.
+        run: brew install ruby
       - name: Build ${{ matrix.version }} (${{ matrix.platform }})
         run: tools/build recipe.yml "${{ matrix.version }}" "${{ matrix.platform }}"
       - name: Stage artifact

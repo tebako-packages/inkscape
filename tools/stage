@@ -19,13 +19,16 @@ version = recipe.dig("upstream", "version")
 root = File.join(out_dir, "root")
 Tpkg.die("payload tree #{root} missing — run tools/build first") unless File.directory?(root)
 
-tools = Tpkg.ensure_dwarfs_tools(recipe)
+tools = Tpkg.ensure_dwarfs_tools(recipe, platform: platform)
 # ship the mounter tools alongside the image: boot_smoke (and users) get a
-# known-good dwarfs-t binary set for this exact payload
+# known-good tool set for this exact payload (dwarfs-t trio on linux,
+# mkdwarfs+tebakofs from libtfs on macOS)
 tbin = File.join(out_dir, "dwarfs-t-bin")
 FileUtils.mkdir_p(tbin)
 tools.each_value { |t| FileUtils.cp(t, tbin) if t && File.executable?(t) }
-img = File.join(out_dir, "inkscape-#{version}-#{platform}.dwarfs")
+ext_map = recipe.dig("image", "extension") || {}
+ext = ext_map[platform] || ext_map["default"] || "dwarfs"
+img = File.join(out_dir, "inkscape-#{version}-#{platform}.#{ext}")
 FileUtils.rm_f(img)
 Tpkg.sh(tools["mkdwarfs"], "-i", root, "-o", img, "--force")
 digest = Tpkg.sha256(img)
