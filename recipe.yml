@@ -97,11 +97,23 @@ build:
   brew_packages:            # macOS legs: Homebrew bottles are the macOS
                             # platform-stack supplier (apt counterpart) — ONE
                             # self-consistent source, same rule as linux
-    # toolchain (preinstalled on macos-14 runners; idempotent)
+    # toolchain (preinstalled on macos-14 runners; idempotent).
+    # The autotools set mirrors the linux system_packages toolchain:
+    # vcpkg's make-based ports (gsl, libatomic_ops, libbacktrace, …) run
+    # autoreconf and hard-require autoconf/automake/autoconf-archive/
+    # libtoolize (brew's glibtoolize satisfies vcpkg's probe).
     - cmake
     - ninja
     - pkg-config
     - ruby                   # feedstock tools need >= 2.7; macOS system ruby is 2.6
+    - autoconf
+    - autoconf-archive
+    - automake
+    - libtool
+    - bison
+    - flex
+    - gperf
+    - nasm
     # GNOME platform stack — the gtkmm3 ABI family. gtkmm3 pulls the versioned
     # formulae glibmm@2.66 (glibmm-2.4 ABI), cairomm@1.14, pangomm@2.46,
     # atkmm@2.28, libsigc++@2 + gtk+3/pango/cairo/harfbuzz/fontconfig/
