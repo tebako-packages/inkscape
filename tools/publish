@@ -17,7 +17,7 @@ recipe = Tpkg.recipe(File.join(Tpkg::ROOT, "recipe.yml"))
 version = recipe.dig("upstream", "version")
 Tpkg.die("tag #{tag} does not start with upstream version #{version}") unless tag.start_with?(version)
 
-images = Dir[File.join(Tpkg::ROOT, "out", "*", "*.dwarfs")].sort
+images = Dir[File.join(Tpkg::ROOT, "out", "*", "*.{dwarfs,tfs}")].sort
 Tpkg.die("no payload images under out/ — nothing to publish") if images.empty?
 manifests = Dir[File.join(Tpkg::ROOT, "out", "*", "payload-*.yaml")].sort
 
