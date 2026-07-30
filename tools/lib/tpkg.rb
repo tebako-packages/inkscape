@@ -15,8 +15,8 @@ module Tpkg
 
   # platform triplet (recipe) => CI runner + vcpkg overlay triplet
   PLATFORM_MAP = {
-    "x86_64-linux-gnu"  => { "runner" => "ubuntu-24.04",     "vcpkg_triplet" => "x64-linux-dynamic" },
-    "aarch64-linux-gnu" => { "runner" => "ubuntu-24.04-arm", "vcpkg_triplet" => "arm64-linux-dynamic" },
+    "x86_64-linux-gnu"  => { "runner" => "ubuntu-22.04",     "vcpkg_triplet" => "x64-linux-dynamic" },
+    "aarch64-linux-gnu" => { "runner" => "ubuntu-22.04-arm", "vcpkg_triplet" => "arm64-linux-dynamic" },
     "aarch64-macos"     => { "runner" => "macos-14",         "vcpkg_triplet" => "arm64-osx-static" },
     "x86_64-macos"      => { "runner" => "macos-13",         "vcpkg_triplet" => "x64-osx-static" }
   }.freeze
