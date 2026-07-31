@@ -3,13 +3,20 @@
 
 # Usage: tools/stage out/<platform> <platform>
 #
-# Packs the payload tree (out/<platform>/root) into a dwarfs image with
-# mkdwarfs-t, sha256s it, and fills manifests/payload.yaml for the platform.
+# Embeds the payload manifest at /__tpkg__/manifest.yaml (tier 1,
+# authoritative — blob_sha256 zeroed per the fixed-point rule, spec 03 §7),
+# packs the payload tree (out/<platform>/root) into a dwarfs image with
+# tfs-cli's in-process writer (never the mkdwarfs CLI), sha256s it, and
+# fills the sibling manifest for the release tier.
 # Outputs next to the tree:
-#   out/<platform>/inkscape-<version>-<platform>.dwarfs
+#   out/<platform>/inkscape-<version>-<platform>.tfs
 #   out/<platform>/payload-<platform>.yaml
+#
+# Env:
+#   TFS_CLI   the tfs-cli binary (default: tfs on PATH — from the tebako
+#             release channel; the in-process dwarfs-t writer)
 
-require_relative "lib/tpkg"
+autoload :Tpkg, File.expand_path("lib/tpkg", __dir__)
 
 out_dir, platform = ARGV
 Tpkg.die("usage: tools/stage out/<platform> <platform>") unless out_dir && platform
@@ -27,24 +34,36 @@ tbin = File.join(out_dir, "dwarfs-t-bin")
 FileUtils.mkdir_p(tbin)
 tools.each_value { |t| FileUtils.cp(t, tbin) if t && File.executable?(t) }
 ext_map = recipe.dig("image", "extension") || {}
-ext = ext_map[platform] || ext_map["default"] || "dwarfs"
+ext = ext_map[platform] || ext_map["default"] || "tfs"
 img = File.join(out_dir, "inkscape-#{version}-#{platform}.#{ext}")
 FileUtils.rm_f(img)
-Tpkg.sh(tools["mkdwarfs"], "-i", root, "-o", img, "--force")
-digest = Tpkg.sha256(img)
-File.write("#{img}.sha256", "#{digest}  #{File.basename(img)}\n")
-Tpkg.log("image #{img} (#{(File.size(img) / 1e6).round(1)} MB) sha256=#{digest[0, 16]}…")
 
-# fill the payload manifest from the recipe (spec 03)
+ZERO_SHA = "0" * 64
+feedstock_sha = (Tpkg.capture("git", "rev-parse", "HEAD", chdir: Tpkg::ROOT).first.strip rescue "unknown")
 tpl = File.read(File.join(Tpkg::ROOT, "manifests", "payload.yaml"))
 filled = tpl
          .gsub("@@NAME@@", recipe["name"])
          .gsub("@@VERSION@@", version)
          .gsub("@@CREATED@@", Time.now.utc.strftime("%Y-%m-%dT%H:%M:%SZ"))
          .gsub("@@UPSTREAM_SHA256@@", recipe.dig("upstream", "sha256"))
-         .gsub("@@FEEDSTOCK_SHA@@", (Tpkg.capture("git", "rev-parse", "HEAD", chdir: Tpkg::ROOT).first.strip rescue "unknown"))
-         .gsub("@@BLOB_SHA256@@", digest)
+         .gsub("@@FEEDSTOCK_SHA@@", feedstock_sha)
          .gsub(/platforms: \[.*\]/, "platforms: [#{platform}]")
+
+# the embedded copy: blob_sha256 is the fixed-point placeholder (the image
+# cannot carry its own digest); install mirrors THIS manifest as parsed
+embedded = filled.gsub("@@BLOB_SHA256@@", ZERO_SHA)
+tpkg_dir = File.join(root, "__tpkg__")
+FileUtils.mkdir_p(tpkg_dir)
+File.write(File.join(tpkg_dir, "manifest.yaml"), embedded)
+Tpkg.log("embedded manifest #{File.join(tpkg_dir, 'manifest.yaml')}")
+
+tfs = ENV.fetch("TFS_CLI", "tfs")
+Tpkg.sh(tfs, "mkimage", "--format", "dwarfs", root, "--output", img)
+digest = Tpkg.sha256(img)
+File.write("#{img}.sha256", "#{digest}  #{File.basename(img)}\n")
+Tpkg.log("image #{img} (#{(File.size(img) / 1e6).round(1)} MB) sha256=#{digest[0, 16]}…")
+
+# the sibling manifest (release tier): the real blob digest, one tier out
 manifest = File.join(out_dir, "payload-#{platform}.yaml")
-File.write(manifest, filled)
+File.write(manifest, filled.gsub("@@BLOB_SHA256@@", digest))
 Tpkg.log("manifest #{manifest}")

@@ -9,8 +9,8 @@ identity:
   created: "@@CREATED@@"
   source: {src_sha256: "@@UPSTREAM_SHA256@@", commit: "@@FEEDSTOCK_SHA@@", builder: "gha"}
   digest:
-    tree_hash: ""        # merkle root when the CAS lands (spec 03)
-    blob_sha256: "@@BLOB_SHA256@@"
+    tree_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"  # placeholder until the CAS lands (spec 03)
+    blob_sha256: "@@BLOB_SHA256@@"   # @@ZERO_SHA256@@ inside the image (spec 03 §7)
   signing: {state: unsigned}
   encryption: {state: none}
   annotations: {}
@@ -18,8 +18,6 @@ provides:
   executables:
     - {name: "inkscape", path: "/bin/inkscape", version: "@@VERSION@@"}
   libraries: []
-exec_tier: dynamic
-exec_closure: []
-platforms: [x86_64-linux-gnu, aarch64-linux-gnu, aarch64-macos, x86_64-macos]
-capabilities: {exec: true, read: true}
+  platforms: [x86_64-linux-gnu, aarch64-linux-gnu, aarch64-macos, x86_64-macos]
+  capabilities: {exec: true, read: true}
 requires: []             # toolkit deps: {kind: toolkit, name, constraint, mount}

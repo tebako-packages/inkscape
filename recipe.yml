@@ -165,11 +165,10 @@ build:
 
 image:
   format: dwarfs
-  # artifact extension per platform: .dwarfs for linux legs; .tfs (tebako fs
-  # image — same DwarFS format, libtfs tooling/branding) for the macOS legs.
+  # .tfs everywhere (the tebako fs image — DwarFS-T format). Normal dwarfs
+  # readers cannot read it; never use the .dwarfs extension.
   extension:
-    default: dwarfs
-    aarch64-macos: tfs
+    default: tfs
   # mkdwarfs-t from tamatebako/dwarfs-t. The project has NO published GitHub
   # releases yet (release.yml exists but never produced one as of 2026-07-26),
   # so tools/stage builds mkdwarfs/dwarfs from this pinned commit unless

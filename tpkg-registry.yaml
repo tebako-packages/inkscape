@@ -1,7 +1,15 @@
 schema_version: 1
-# This feedstock's own registry (conventions.md: releases carry it).
-packages:
-  - name: inkscape
-    kind: toolkit
-    summary: Vector graphics editor (CLI tools) — metanorma's graphics chain
-    registry: tfs:github:tebako-packages/inkscape
+payloads:
+- name: inkscape
+  kind: toolkit
+  versions:
+  - version: '1.4.3'
+    platforms:
+      aarch64-macos:
+        artifact: inkscape-1.4.3-macos-arm64.tfs
+        sha256: '74a7b4607dab557b4fdabfb57427873bcf80990ba29d9e626fb0db388f842e57'
+    release:
+      ref: tfs:github:tebako-packages/inkscape:1.4.3
+    entrypoints:
+    - inkscape
+  default: '1.4.3'
