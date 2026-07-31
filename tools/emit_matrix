@@ -5,7 +5,7 @@
 # Emits the CI build matrix (JSON, one leg per version × platform) on stdout.
 # YAML stays thin; logic lives here.
 
-require_relative "lib/tpkg"
+autoload :Tpkg, File.expand_path("lib/tpkg", __dir__)
 
 recipe = Tpkg.recipe(ARGV[0] || "recipe.yml")
 version = recipe.dig("upstream", "version") or Tpkg.die("recipe missing upstream.version")

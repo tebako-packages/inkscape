@@ -10,7 +10,7 @@
 # Then: SVG -> PNG and SVG -> PDF export of fixtures/smoke.svg, and an
 # ldd "not found" sweep over every ELF in the payload.
 
-require_relative "lib/tpkg"
+autoload :Tpkg, File.expand_path("lib/tpkg", __dir__)
 require "tmpdir"
 
 out_dir = ARGV[0] or Tpkg.die("usage: tools/boot_smoke out/<platform>")

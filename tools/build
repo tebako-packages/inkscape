@@ -14,7 +14,7 @@
 # No patchelf/chrpath anywhere: RPATH is wired at BUILD time
 # (-Wl,--disable-new-dtags + upstream's own CMAKE_INSTALL_RPATH).
 
-require_relative "lib/tpkg"
+autoload :Tpkg, File.expand_path("lib/tpkg", __dir__)
 
 recipe_path, version, platform = ARGV
 Tpkg.die("usage: tools/build recipe.yml <version> <platform>") unless recipe_path && version && platform

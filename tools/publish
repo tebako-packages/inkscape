@@ -8,7 +8,7 @@
 # the tag (<upstream-version>, `-N` suffix for packaging re-releases).
 # Expects CI to have downloaded every leg's out/<platform>/ into ./out/.
 
-require_relative "lib/tpkg"
+autoload :Tpkg, File.expand_path("lib/tpkg", __dir__)
 
 tag = ENV["GITHUB_REF_NAME"] || Tpkg.capture("git", "describe", "--tags", chdir: Tpkg::ROOT).first.strip
 Tpkg.die("not on a tag; refusing to publish") if tag.nil? || tag.empty?
