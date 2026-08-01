@@ -73,7 +73,10 @@ tarball = Tpkg.fetch(up["url"], File.join(Tpkg.cache_dir, "src", File.basename(u
 src = File.join(work, "src")
 unless File.directory?(src)
   FileUtils.mkdir_p(src)
-  Tpkg.sh("tar", "-xf", tarball, "-C", src, "--strip-components=1")
+  # the archive operand is a bare name on purpose: a drive-letter-leading
+  # path (D:\…) is GNU tar's rmt syntax (host:path — it tries to rsh to
+  # host "D", exit 128). chdir + basename is portable across every tar.
+  Tpkg.sh("tar", "-xf", File.basename(tarball), "-C", src, "--strip-components=1", chdir: File.dirname(tarball))
 end
 
 # --- 3. vcpkg deps (commit-pinned) -------------------------------------------
