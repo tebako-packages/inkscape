@@ -84,18 +84,18 @@ jobs:
         # Never fails the leg: a miss means the ports build normally.
         # The dwarfs static triplet is derived from the runner, NOT the
         # recipe's payload triplet (this tree is for the imager's
-        # dwarfs-t-sys build, not the inkscape deps).
+        # dwarfs-t-sys build, not the inkscape deps). The script owns the
+        # canonical root and exports DWARFS_RS_VCPKG_INSTALLED_DIR.
         run: |
           case "${{ runner.os }}-${{ runner.arch }}" in
-            Linux-X64)    t=x64-linux-static;   root=/home/runner/vcpkg-inst ;;
-            Linux-ARM64)  t=arm64-linux-static; root=/home/runner/vcpkg-inst ;;
-            macOS-X64)    t=x64-osx-static;     root=/Users/runner/vcpkg-inst ;;
-            macOS-ARM64)  t=arm64-osx-static;   root=/Users/runner/vcpkg-inst ;;
+            Linux-X64)    t=x64-linux-static ;;
+            Linux-ARM64)  t=arm64-linux-static ;;
+            macOS-X64)    t=x64-osx-static ;;
+            macOS-ARM64)  t=arm64-osx-static ;;
           esac
           bash dwarfs-rs/dwarfs-t/ci/vcpkg-baseline-restore.sh \
-            dwarfs-rs/dwarfs-t "$t" "$root" \
+            dwarfs-rs/dwarfs-t "$t" \
             || echo "baseline miss — ports build normally"
-          echo "DWARFS_RS_VCPKG_INSTALLED_DIR=$root" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
       - name: Set up vcpkg
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11.6
