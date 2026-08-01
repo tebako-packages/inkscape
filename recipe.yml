@@ -152,7 +152,10 @@ build:
     - mingw-w64-ucrt-x86_64-gtkmm3
     - mingw-w64-ucrt-x86_64-libepoxy   # must match the gtk3 build (same supplier)
     - mingw-w64-ucrt-x86_64-potrace    # 'potrace' port is absent from vcpkg
-    - mingw-w64-ucrt-x86_64-gettext    # libintl headers: FindIntl is unconditional
+    - mingw-w64-ucrt-x86_64-gettext-runtime  # libintl.h + libintl-8.dll:
+                             # FindIntl is unconditional. (the old umbrella
+                             # 'gettext' package is gone — msys2 split it
+                             # into runtime/tools/libtextstyle)
 
   cmake:
     generator: "Ninja"

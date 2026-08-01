@@ -14,7 +14,27 @@ if [ "${#pkgs[@]}" -eq 0 ]; then
   echo "tools/pacman_install: no build.pacman_packages in $RECIPE — nothing to do"
   exit 0
 fi
+
+db_has_all() {
+  local p
+  for p in "${pkgs[@]}"; do
+    pacman -Si "$p" >/dev/null 2>&1 || return 1
+  done
+}
+
 echo "tools/pacman_install: pacman -Sy --needed ${pkgs[*]}"
 # -Sy: refresh the sync dbs first — a missing/empty db is pacman's
 # "target not found", never the answer we want (named errors only).
-pacman -Sy --needed --noconfirm --noprogressbar "${pkgs[@]}"
+pacman -Sy --noconfirm --noprogressbar
+if ! db_has_all; then
+  # Loud recovery, never a silent fallback: dump the db facts, force a
+  # clean re-refresh, and let the install below fail verbatim with the
+  # diagnostics above it if the db still cannot resolve the list.
+  echo "tools/pacman_install: WARNING: the sync db cannot resolve the recipe packages — forcing a clean refresh" >&2
+  grep -E '^\[|^Include|^Server|^Architecture' /etc/pacman.conf || true
+  ls -la /var/lib/pacman/sync/ || true
+  rm -f /var/lib/pacman/sync/*
+  pacman -Syy --noconfirm --noprogressbar
+  db_has_all || { pacman -Sl ucrt64 2>/dev/null | head -5; } || true
+fi
+pacman -S --needed --noconfirm --noprogressbar "${pkgs[@]}"
