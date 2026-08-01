@@ -14,5 +14,7 @@ if [ "${#pkgs[@]}" -eq 0 ]; then
   echo "tools/pacman_install: no build.pacman_packages in $RECIPE — nothing to do"
   exit 0
 fi
-echo "tools/pacman_install: pacman -S --needed ${pkgs[*]}"
-pacman -S --needed --noconfirm --noprogressbar "${pkgs[@]}"
+echo "tools/pacman_install: pacman -Sy --needed ${pkgs[*]}"
+# -Sy: refresh the sync dbs first — a missing/empty db is pacman's
+# "target not found", never the answer we want (named errors only).
+pacman -Sy --needed --noconfirm --noprogressbar "${pkgs[@]}"

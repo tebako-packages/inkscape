@@ -108,13 +108,20 @@ module Tpkg
 
   # Clone a git repo at a pinned commit and verify HEAD matches the pin.
   # A commit pin authenticates the whole tree; used where upstream ships no
-  # release tarball to sha256 (vcpkg, dwarfs-t).
+  # release tarball to sha256 (vcpkg, dwarfs-t). A cache-restored partial
+  # tree (installed/, downloads/ restored under a restore-key with no .git)
+  # is initialized IN PLACE: `git clone` refuses a non-empty directory.
   def git_pinned(git_url, commit, dest)
     if !File.directory?(File.join(dest, ".git"))
-      sh("git", "clone", "--filter=blob:none", git_url, dest)
+      if File.directory?(dest) && !Dir.empty?(dest)
+        sh("git", "init", "--quiet", dest)
+        sh("git", "remote", "add", "origin", git_url, chdir: dest)
+      else
+        sh("git", "clone", "--filter=blob:none", git_url, dest)
+      end
     end
     unless system("git", "-C", dest, "cat-file", "-e", "#{commit}^{commit}")
-      sh("git", "fetch", "--quiet", "origin", commit, chdir: dest)
+      sh("git", "fetch", "--quiet", "--filter=blob:none", "origin", commit, chdir: dest)
     end
     sh("git", "checkout", "--quiet", commit, chdir: dest)
     head, = capture("git", "rev-parse", "HEAD", chdir: dest)
