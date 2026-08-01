@@ -42,7 +42,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Cache the vcpkg installed tree
+      - name: Cache the vcpkg installed tree (POSIX legs)
+        if: runner.os != 'Windows'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           # The recipe's port set builds from source on every cold run
@@ -57,13 +58,65 @@ jobs:
           key: feedstock-vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('recipe.yml', 'tools/triplets/**') }}
           restore-keys: |
             feedstock-vcpkg-${{ runner.os }}-${{ runner.arch }}-
+      - name: Cache the vcpkg installed tree (windows leg)
+        if: runner.os == 'Windows'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # The windows leg's vcpkg root is D:\tpkg-cache (TPKG_CACHE): a
+          # SHORT root — vcpkg buildtrees + boost's deep obj paths
+          # otherwise flirt with MAX_PATH under the workspace prefix.
+          # ~/AppData/Local/vcpkg is vcpkg's default binary-archive cache.
+          path: |
+            D:\tpkg-cache\vcpkg\installed
+            D:\tpkg-cache\vcpkg\downloads
+            ~/AppData/Local/vcpkg
+          key: feedstock-vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('recipe.yml', 'tools/triplets/**') }}
+          restore-keys: |
+            feedstock-vcpkg-${{ runner.os }}-${{ runner.arch }}-
       - name: Toolchain ruby (macOS)
         if: runner.os == 'macOS'
         # feedstock tools need ruby >= 3 (endless defs in tools/lib/tpkg.rb);
         # macOS system ruby is 2.6. brew puts /opt/homebrew/bin first in PATH.
         run: brew install ruby
+      - name: Set up MSys2 (ucrt64 toolchain + build tools)
+        if: matrix.platform == 'x86_64-windows-ucrt'
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2
+        with:
+          msystem: ucrt64
+          path-type: minimal
+          # THE windows toolchain (the same ucrt64 gcc family the ruby
+          # runtime factory and the vcpkg baseline use — never choco gcc)
+          # + the build tools the closed PATH exposes. binutils' unprefixed
+          # objdump.exe/strip.exe (the closure's tools) ride in toolchain.
+          # The GNOME platform stack is recipe data — next step.
+          install: >-
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-make
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-libarchive
+            mingw-w64-ucrt-x86_64-ruby
+      - name: GNOME platform stack (pacman, ucrt64)
+        if: matrix.platform == 'x86_64-windows-ucrt'
+        shell: msys2 {0}
+        # pacman is provisioning, not build logic: it runs in its native
+        # msys2 environment (the build steps' closed PATH keeps the msys
+        # /usr/bin out — the vcpkg-autotools ABI clash rule). The package
+        # list is recipe data (build.pacman_packages).
+        run: tools/pacman_install recipe.yml
       - name: Build ${{ matrix.version }} (${{ matrix.platform }})
+        if: matrix.platform != 'x86_64-windows-ucrt'
         run: tools/build recipe.yml "${{ matrix.version }}" "${{ matrix.platform }}"
+      - name: Build ${{ matrix.version }} (${{ matrix.platform }}, ucrt64)
+        if: matrix.platform == 'x86_64-windows-ucrt'
+        shell: bash
+        env:
+          # short vcpkg root (the MAX_PATH rule — see the windows cache step)
+          TPKG_CACHE: D:\tpkg-cache
+        # the closed ucrt64 environment (one toolchain, closed PATH, the
+        # make toolshim, cargo/botan/bindgen steering) is tools/ci_run.
+        run: tools/ci_run ruby tools/build recipe.yml "${{ matrix.version }}" "${{ matrix.platform }}"
       # The imager: tfs-cli (in-process dwarfs-t writer), built from the
       # product repo — the feedstock never shells to mkdwarfs.
       - name: Checkout tebako (the imager) + dwarfs-rs (path dep)
@@ -92,11 +145,17 @@ jobs:
             Linux-ARM64)  t=arm64-linux-static ;;
             macOS-X64)    t=x64-osx-static ;;
             macOS-ARM64)  t=arm64-osx-static ;;
+            Windows-X64)  t=x64-mingw-static ;;
           esac
           bash dwarfs-rs/dwarfs-t/ci/vcpkg-baseline-restore.sh \
             dwarfs-rs/dwarfs-t "$t" \
             || echo "baseline miss — ports build normally"
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Install the windows-gnu rust target
+        if: matrix.platform == 'x86_64-windows-ucrt'
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: x86_64-pc-windows-gnu
       - name: Set up vcpkg
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11.6
         with:
@@ -105,11 +164,14 @@ jobs:
       - name: Cache vcpkg package archives
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.cache/vcpkg
+          path: |
+            ~/.cache/vcpkg
+            ~/AppData/Local/vcpkg
           key: vcpkg-archives-${{ runner.os }}-feedstock-${{ hashFiles('dwarfs-rs/dwarfs-t/vcpkg.json') }}
           restore-keys: |
             vcpkg-archives-${{ runner.os }}-feedstock-
       - name: Build tfs-cli (the imager)
+        if: matrix.platform != 'x86_64-windows-ucrt'
         env:
           DWARFS_RS_VCPKG_ROOT: ${{ github.workspace }}/.vcpkg-root
           VCPKG_ROOT: ${{ github.workspace }}/.vcpkg-root
@@ -118,12 +180,39 @@ jobs:
         run: |
           cargo build --release --manifest-path tebako-rs/Cargo.toml -p tfs-cli
           echo "$GITHUB_WORKSPACE/tebako-rs/target/release" >> "$GITHUB_PATH"
+      - name: Build tfs-cli (the imager, windows-gnu)
+        if: matrix.platform == 'x86_64-windows-ucrt'
+        shell: bash
+        env:
+          DWARFS_RS_VCPKG_ROOT: ${{ github.workspace }}/.vcpkg-root
+          VCPKG_ROOT: ${{ github.workspace }}/.vcpkg-root
+          SQFS_SYS_VCPKG_ROOT: ${{ github.workspace }}/.vcpkg-root
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: |
+          tools/ci_run cargo build --release --manifest-path tebako-rs/Cargo.toml -p tfs-cli --target x86_64-pc-windows-gnu
+          echo "$GITHUB_WORKSPACE/tebako-rs/target/x86_64-pc-windows-gnu/release" >> "$GITHUB_PATH"
       - name: Stage artifact
+        if: matrix.platform != 'x86_64-windows-ucrt'
         env:
           TFS_CLI: tfs
         run: tools/stage "out/${{ matrix.platform }}" "${{ matrix.platform }}"
+      - name: Stage artifact (windows)
+        if: matrix.platform == 'x86_64-windows-ucrt'
+        shell: bash
+        env:
+          TFS_CLI: tfs
+        run: tools/ci_run ruby tools/stage "out/${{ matrix.platform }}" "${{ matrix.platform }}"
       - name: Boot-smoke
+        if: matrix.platform != 'x86_64-windows-ucrt'
         run: tools/boot_smoke "out/${{ matrix.platform }}" || true  # advisory until phase A proves
+      - name: Boot-smoke (windows — the acceptance gate)
+        if: matrix.platform == 'x86_64-windows-ucrt'
+        shell: bash
+        env:
+          TFS_CLI: tfs
+        # NOT advisory on windows: --version + SVG->PNG/PDF exports from the
+        # extracted image with an empty environment, then the objdump sweep.
+        run: tools/ci_run ruby tools/boot_smoke "out/${{ matrix.platform }}"
       - name: Upload payload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

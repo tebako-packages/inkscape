@@ -15,10 +15,17 @@ module Tpkg
 
   # platform triplet (recipe) => CI runner + vcpkg overlay triplet
   PLATFORM_MAP = {
-    "x86_64-linux-gnu"  => { "runner" => "ubuntu-22.04",     "vcpkg_triplet" => "x64-linux-dynamic" },
-    "aarch64-linux-gnu" => { "runner" => "ubuntu-22.04-arm", "vcpkg_triplet" => "arm64-linux-dynamic" },
-    "aarch64-macos"     => { "runner" => "macos-14",         "vcpkg_triplet" => "arm64-osx-static" },
-    "x86_64-macos"      => { "runner" => "macos-15-intel", "vcpkg_triplet" => "x64-osx-static" }
+    "x86_64-linux-gnu"   => { "runner" => "ubuntu-22.04",     "vcpkg_triplet" => "x64-linux-dynamic" },
+    "aarch64-linux-gnu"  => { "runner" => "ubuntu-22.04-arm", "vcpkg_triplet" => "arm64-linux-dynamic" },
+    "aarch64-macos"      => { "runner" => "macos-14",         "vcpkg_triplet" => "arm64-osx-static" },
+    "x86_64-macos"       => { "runner" => "macos-15-intel",   "vcpkg_triplet" => "x64-osx-static" },
+    # x64-mingw-dynamic is a vcpkg COMMUNITY triplet (no tools/triplets file):
+    # the vcpkg deps ship as DLLs and join the PE/DLL closure like every
+    # other leg's supplier libs. (x64-mingw-static would fold them into the
+    # exe instead — legitimate for a wrapped tier, but no link-time
+    # interposition archive ships for payload exes; see recipe.yml's
+    # exec-tier note.)
+    "x86_64-windows-ucrt" => { "runner" => "windows-latest",  "vcpkg_triplet" => "x64-mingw-dynamic" }
   }.freeze
 
   # The glibc family + the program loader stay OUTSIDE the closure: they must
@@ -138,6 +145,15 @@ module Tpkg
                "dwarfs" => ENV["DWARFS"],
                "dwarfsextract" => ENV["DWARFSEXTRACT"],
                "tebakofs" => ENV["TEBAKOFS"] }.compact
+    end
+
+    if platform&.end_with?("-windows-ucrt")
+      # The imager/reader on windows is tfs-cli (the Rust tfs crate is the
+      # shipping dwarfs-t reader/writer), built in-leg for
+      # x86_64-pc-windows-gnu and handed over via $TFS_CLI — dwarfs-t has no
+      # windows releases and libtfs (the legacy C++ parity oracle) ships
+      # macOS assets only. tools/stage stages the imager next to the image.
+      return {}
     end
 
     if platform&.end_with?("-macos")
@@ -389,6 +405,160 @@ module Tpkg
     files = Dir[File.join(root, "**", "*")].select { |f| macho?(f) }
     files.each { |f| sh("codesign", "--force", "--sign", "-", f, quiet: true) }
     log("codesign: ad-hoc re-signed #{files.size} Mach-O files")
+  end
+
+  # --- windows (PE/DLL) closure ----------------------------------------------
+
+  # The Win32/NT API surface stays OUTSIDE the closure — the windows
+  # counterpart of the linux glibc / macOS libSystem exclusion: these DLLs
+  # are the OS contract (System32, several of them KnownDLLs that the loader
+  # always maps from the system directory), present on every supported
+  # Windows. Compared CASE-INSENSITIVELY (PE import names are). The mingw
+  # toolchain runtime is NOT here: libstdc++-6/libgcc_s_seh-1/libwinpthread-1/
+  # libgomp-1 ride in the closure exactly like libstdc++/libgcc_s on linux.
+  # Conservative rule (conventions): when in doubt, package it — an import
+  # not in this set and not found in a supplier root aborts the build with a
+  # named error, never a silent skip.
+  WIN_SYSTEM_DLLS = %w[
+    kernel32.dll kernelbase.dll ntdll.dll msvcrt.dll ucrtbase.dll
+    user32.dll gdi32.dll gdi32full.dll win32u.dll
+    advapi32.dll shell32.dll shlwapi.dll ole32.dll oleaut32.dll combase.dll
+    ws2_32.dll mswsock.dll nsi.dll dnsapi.dll iphlpapi.dll winhttp.dll wininet.dll
+    sechost.dll rpcrt4.dll bcrypt.dll ncrypt.dll crypt32.dll cryptbase.dll
+    winmm.dll imm32.dll msctf.dll oleacc.dll setupapi.dll cfgmgr32.dll devobj.dll
+    version.dll winspool.drv comdlg32.dll comctl32.dll
+    dwmapi.dll uxtheme.dll msimg32.dll opengl32.dll glu32.dll
+    d2d1.dll d3d9.dll d3d11.dll dxgi.dll dwrite.dll usp10.dll
+    windowscodecs.dll gdiplus.dll secur32.dll sspicli.dll netapi32.dll
+    userenv.dll psapi.dll dbghelp.dll powrprof.dll hid.dll wintrust.dll
+    imagehlp.dll wldap32.dll normaliz.dll kernel.appcore.dll profapi.dll
+    bcryptprimitives.dll
+  ].freeze
+  # API-set schema names (api-ms-win-*.dll, ext-ms-win-*.dll) are virtual
+  # contracts the OS's API-set resolver maps onto System32 hosts — the ucrt
+  # CRT surface (api-ms-win-crt-*) imports this way. Always OS, never shipped.
+  WIN_SYSTEM_DLL_RE = /\A(api|ext)-ms-win-/i.freeze
+
+  def windows_system_dll?(name)
+    WIN_SYSTEM_DLLS.include?(name.downcase) || name.match?(WIN_SYSTEM_DLL_RE)
+  end
+
+  # PE/COFF detection: MZ header, e_lfanew at 0x3c, "PE\0\0" signature there.
+  def pe?(path)
+    return false unless File.file?(path) && !File.symlink?(path)
+
+    File.open(path, "rb") do |f|
+      return false unless f.read(2) == "MZ"
+      return false unless f.read(62)&.bytesize == 62 # to 0x40
+      f.seek(0x3c)
+      lfanew = f.read(4)&.unpack1("V")
+      return false if lfanew.nil? || lfanew > 1 << 20
+      f.seek(lfanew)
+      f.read(4) == "PE\0\0"
+    end
+  rescue Errno::EACCES, Errno::ENOENT
+    false
+  end
+
+  # Every imported DLL name (the plain import directory AND the delay-import
+  # one — both print `DLL Name:` records). objdump is the ucrt64 binutils
+  # one: MSYS2 ships objdump.exe WITHOUT the x86_64-w64-mingw32- alias (the
+  # tebako-rs run 30697405256 lesson); the closed PATH makes the one
+  # toolchain's objdump unambiguous.
+  def objdump_imports(path)
+    out, ok = capture("objdump", "-p", path)
+    die("objdump -p failed on #{path} (ucrt64 binutils objdump.exe must be on PATH):\n#{out}") unless ok
+    out.each_line.filter_map { |l| Regexp.last_match(1) if l =~ /^\s*DLL Name:\s*(\S+)/i }.uniq
+  end
+
+  # Fixpoint PE/DLL closure: walk objdump imports from the seeds (every PE in
+  # bin/ + lib/), copy each non-system import FLAT into bin/ next to the exe —
+  # the windows form of the $ORIGIN closure. PE has no RPATH: the loader
+  # searches the exe's directory FIRST, so bin/ placement resolves imports
+  # from every PE in the process (the importing DLL's own dir is not searched
+  # without a manifest or AddDllDirectory call). Rules:
+  #  * suppliers is an ordered list of directories (vcpkg installed bin FIRST,
+  #    then the ucrt64 bin dir): on name collisions (zlib1.dll, libpng16-16.dll)
+  #    the first supplier wins — it is the build we actually linked, the same
+  #    vcpkg-first rule as the linux leg's SONAME collisions. Lookups are
+  #    case-insensitive (the PE loader's are).
+  #  * the payload's own DLLs are providers too; one living outside bin/
+  #    (e.g. an upstream LIBRARY-destination install) is pulled into bin/
+  #    as well — the exe-directory rule applies to every DLL alike, ours or
+  #    a supplier's.
+  #  * recurse over the copied DLLs until fixpoint, then verify: no import of
+  #    any payload PE may name a DLL outside the system set + bin/.
+  # Returns {downcased leaf => source path}.
+  def windows_closure(root, suppliers:)
+    bind = File.join(root, "bin")
+    FileUtils.mkdir_p(bind)
+    pe_files = -> { Dir[File.join(root, "bin", "*.{exe,dll}"), File.join(root, "lib", "**", "*.{exe,dll}")].select { |f| pe?(f) } }
+    copied = {}   # downcased leaf => source path (supplier or payload)
+    system_refs = {}
+    # the payload's own DLLs by downcased leaf (bin/ first: it wins ties)
+    providers = {}
+    pe_files.call.each { |f| providers[File.basename(f).downcase] ||= f }
+    resolve = lambda do |name|
+      suppliers.filter_map do |dir|
+        next unless File.directory?(dir)
+
+        exact = File.join(dir, name)
+        found = File.exist?(exact) ? exact : Dir.children(dir).find { |c| c.casecmp?(name) }&.then { |c| File.join(dir, c) }
+        found if found && pe?(found)
+      end.first
+    end
+
+    queue = pe_files.call
+    seen = {}
+    until queue.empty?
+      f = queue.shift
+      next if seen[f]
+
+      seen[f] = true
+      objdump_imports(f).each do |imp|
+        if windows_system_dll?(imp)
+          system_refs[imp.downcase] = true
+          next
+        end
+        key = imp.downcase
+        next if copied.key?(key)
+        dest = File.join(bind, File.basename(imp))
+        if (own = providers[key]) # the payload's own file provides this import
+          if File.dirname(own) == bind
+            copied[key] = own
+          else
+            FileUtils.cp(own, dest)
+            copied[key] = own
+            queue << dest
+          end
+          next
+        end
+        if File.exist?(dest) # copied by an earlier run of this tool (re-runnable)
+          copied[key] = dest
+          next
+        end
+        src = resolve.call(imp) or
+          die("unresolvable non-system DLL import #{imp} (referenced by #{f.sub("#{root}/", '')}; "\
+              "suppliers: #{suppliers.join(', ')})")
+        FileUtils.cp(src, dest)
+        copied[key] = src
+        queue << dest
+      end
+    end
+
+    # verification pass: no import outside the system set + bin/ may remain
+    leaks = []
+    pe_files.call.each do |f|
+      objdump_imports(f).each do |imp|
+        next if windows_system_dll?(imp) || copied.key?(imp.downcase)
+        next if File.exist?(File.join(bind, File.basename(imp)))
+
+        leaks << "#{f.sub("#{root}/", '')}: #{imp}"
+      end
+    end
+    die("windows closure leaks (imports outside the system set + bin/):\n  #{leaks.join("\n  ")}") unless leaks.empty?
+    log("windows closure: #{copied.size} DLLs packaged into bin/, #{system_refs.size} system DLL refs excluded")
+    copied
   end
 
   def brew_prefix(formula)

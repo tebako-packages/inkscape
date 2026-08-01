@@ -395,6 +395,163 @@ territory, not this feedstock).
   "\x89PNG" literal — always false on any platform (latent pre-existing
   bug; the linux leg never got far enough to notice). Fixed with `.b`.
 
+## x86_64-windows-ucrt leg (the mingw port)
+
+Same recipe, same rules, windows supplier mapping. The genuinely new
+engineering of the leg is the **PE/DLL closure** — the fourth closure model
+in `Tpkg` (after ELF/ldd, Mach-O/otool, codesign).
+
+### Exec tier: `static` (not `dynamic`, not `wrapped`)
+
+The POSIX legs run `dynamic` (the preload-shim tier, spec 07 §8 tier 1).
+On windows that tier **does not exist**: there is no `LD_PRELOAD` analog,
+`libtfs-preload` is POSIX-only by design ("macOS and linux-gnu first-class,
+windows later" — spec 07 §8; `crates/libtfs-preload`: "Windows is roadmap
+30 phase 2"), and DLL injection is not shipped. `wrapped` (link-time
+interposition) was evaluated and rejected for this leg: the tebako-rs
+link-unit is the RUNTIME driver unit (`libtebako_driver.a` is the spec-17
+driver main a runtime factory links, its symbols arscope-renamed — it
+interposes nothing in a payload exe), no CRT-interposition archive ships
+for payload exes, and for a GLib application the windows IO surface is the
+Win32 API (`CreateFileW` & co.) which GNU ld `--wrap` cannot reach. That
+leaves spec 07 §8 tier 2b — **extract-to-exec-cache** (`static`): the
+zero-runtime dispatcher materializes the entrypoint into the store tree and
+execs it there; the exe sees the host filesystem only (a platform-API
+statement, not a trust statement). The PE closure layout below makes the
+materialized tree self-sufficient. Follow-up (tebako-rs, not this repo):
+`tfs/src/exec_closure.rs` parses Mach-O/ELF dependency metadata only — the
+install-time materializer needs a PE import walk before the windows
+zero-runtime materialization closes over DLLs (today it would extract the
+bare exe). The payload layout is correct for it regardless: every DLL sits
+next to the exe, so a whole-`bin/` materialization also works.
+
+### Why x64-mingw-dynamic (vcpkg community triplet)
+
+Same DLL-closure model as the linux leg's shared-lib one: the 29 vcpkg deps
+ship as DLLs and join the closure like every other supplier library —
+explicit, and verifiable by the objdump sweep. `x64-mingw-static` would
+fold them into the exe (also legitimate, and the dwarfs-t baseline's own
+triplet), but then the two supplier worlds split by linkage instead of by
+one rule, and the closure's verification surface shrinks to "trust the
+linker". No `tools/triplets/` file: `x64-mingw-dynamic` is a vcpkg
+community triplet, used as shipped.
+
+### ONE toolchain: ucrt64 gcc (msys2)
+
+The whole leg — vcpkg ports, inkscape, the tfs-cli imager, the closure's
+objdump/strip — uses the setup-msys2 **ucrt64** toolchain (gcc 16.1), the
+same gcc family as the ruby runtime factory and the vcpkg baseline. Never
+choco gcc, never MSVC. The CI steps run under `tools/ci_run`'s closed PATH
+(tebako-rs `ci/windows-gnu-cli.sh`'s proven shape): ucrt64/bin + Git's
+usr/bin (coreutils; the ABI clash is specifically setup-msys2's own
+/usr/bin, which stays OFF — vcpkg downloads its OWN msys2 for autotools
+ports) + Git's cmd + cargo + System32, plus the `make.exe` toolshim (a
+COPY of mingw32-make.exe — Git-bash "symlinks" are text files to
+CreateProcess) and the cargo/botan/bindgen steering. bindgen's
+`-isystem` dirs are passed as **windows-native paths** (`cygpath -m`):
+libclang is a native binary and silently ignores msys-style `/d/...`
+include dirs — the silent-ignore is exactly the `stdbool.h` failure class
+(tebako-rs run 30714614829 documented the symptom; openjdk feedstock run
+30719756048 proved msys paths do NOT fix it).
+
+### Dep provenance: pacman (ucrt64) is the apt/brew counterpart
+
+| inkscape requirement | msys2 ucrt64 package |
+|---|---|
+| gtkmm-3.0 ≥ 3.24 / glibmm-2.4 / sigc++-2.0 / cairomm / pangomm / atkmm | `mingw-w64-ucrt-x86_64-gtkmm3` (pulls the family + gtk3/glib2/pango/cairo/harfbuzz/fontconfig/freetype/gdk-pixbuf2) |
+| epoxy (must match gtk3) | `mingw-w64-ucrt-x86_64-libepoxy` |
+| potrace | `mingw-w64-ucrt-x86_64-potrace` |
+| libintl (unconditional FindIntl) | `mingw-w64-ucrt-x86_64-gettext` |
+
+This is how inkscape's own windows packages are built (their CI is msys2
+mingw), which pins the porting risk to the closure, not the build. pacman
+runs in its native msys2 environment (`shell: msys2 {0}` +
+`tools/pacman_install`) — provisioning, not build logic; the BUILD steps
+keep the msys /usr/bin off PATH. OpenMP needs no special casing (ucrt64
+gcc ships libgomp on the default paths — the macOS libomp dance is a brew
+artifact). pkg-config is ucrt64's pkgconf: it sees the ucrt64 .pc files
+natively; `PKG_CONFIG_PATH` (separator `;` on windows) adds the vcpkg ones.
+
+### Closure rules (fixpoint `objdump -p` walk — `Tpkg.windows_closure`)
+
+PE has no RPATH: the loader searches **the exe's directory first**, so the
+closure lands FLAT in `bin/` next to `inkscape.exe` — the windows form of
+the `$ORIGIN` wiring, and the only placement that resolves imports from
+every PE in the process with an empty environment.
+
+1. Walk every PE in `bin/` + `lib/**` (exe AND dll), parsing
+   `objdump -p`'s `DLL Name:` records — the plain import directory AND the
+   delay-import one. objdump is the ucrt64 binutils one: MSYS2 ships
+   `objdump.exe` WITHOUT the `x86_64-w64-mingw32-` alias (the tebako-rs run
+   30697405256 lesson); the closed PATH makes the one toolchain's tools
+   unambiguous.
+2. **Exclude the Win32/NT API surface** (`WIN_SYSTEM_DLLS` +
+   `api-ms-win-*`/`ext-ms-win-*` API-set contracts — the windows
+   counterpart of the linux glibc / macOS libSystem rule): kernel32, ntdll,
+   msvcrt, ucrtbase, user32, gdi32, advapi32, shell32, ole32, ws2_32, …
+   (see the constant for the full set; compared case-insensitively). The
+   mingw toolchain runtime is NOT excluded: `libstdc++-6.dll`,
+   `libgcc_s_seh-1.dll`, `libwinpthread-1.dll`, `libgomp-1.dll` ride in the
+   closure exactly like libstdc++/libgcc_s on linux.
+3. **Suppliers, ordered**: vcpkg `installed/x64-mingw-dynamic/bin` FIRST,
+   then the ucrt64 bin dir — on name collisions (`zlib1.dll`,
+   `libpng16-16.dll`) the vcpkg build wins: it is the symbol superset we
+   linked (the linux leg's SONAME rule). The payload's own DLLs are
+   providers too; one living outside `bin/` is pulled in (the exe-directory
+   rule applies to every DLL alike). Lookups are case-insensitive.
+4. **Fixpoint**: each copy is walked, pulling deps-of-deps. gdk-pixbuf
+   loaders (dlopen'd — import tables never see them) are copied from the
+   ucrt64 tree first, and the stock fontconfig config from ucrt64's
+   `etc/fonts` (the shim may point `FONTCONFIG_FILE` here) — same shape as
+   the other legs.
+5. **Verify pass**: re-walk; any import that is neither the system set nor
+   a leaf present in `bin/` aborts the build. When in doubt, package it —
+   a miss is a named error, never a silent skip.
+6. **strip**: `strip --strip-unneeded` over every PE (ucrt64 binutils,
+   msys2-standard; PE exports live in `.edata`, unaffected).
+
+Payload-tree diff vs the POSIX legs: `bin/` carries the DLL closure next to
+`inkscape.exe` (plus `inkview.exe`); `lib/` keeps only what upstream
+installs there (import stubs, gdk-pixbuf loaders); `share/inkscape`,
+`etc/fonts` identical. Runtime data: inkscape's bundle detection
+(`src/path-prefix.cpp`, the same mechanism its official windows zip relies
+on) finds `<exe-dir>/../share/inkscape`; GLib's win32 prefix relocation
+resolves the module-relative dirs from the DLLs' location.
+
+### CI wiring
+
+`tools/ci_run` wraps every windows step (closed ucrt64 env + `UCRT64`
+export — `tools/build` dies with a named error without it). The workflow
+adds: setup-msys2 (toolchain + build tools), the pacman GNOME step, the
+`x64-mingw-static` baseline-restore case (for the IMAGER's dwarfs-t-sys
+build — independent of the payload's `x64-mingw-dynamic`), the
+windows-gnu rust target, the tfs-cli build for `x86_64-pc-windows-gnu`,
+and stage/boot-smoke under `tools/ci_run`. The vcpkg tree builds at
+`D:\tpkg-cache` (`TPKG_CACHE`): a SHORT root — vcpkg buildtrees + boost's
+deep obj paths otherwise flirt with MAX_PATH under the workspace prefix.
+`vcpkg.exe` bootstraps via its .bat (downloads the prebuilt tool — no
+compiler needed) with powershell prepended for that one child.
+
+### Boot smoke (the acceptance gate — REQUIRED, not advisory)
+
+No fuse exists for the dwarfs-t tools on windows, and FUSE is not an exec
+mechanism anyway (spec 07 §8): the smoke extracts the image with the
+in-leg-built **tfs-cli** (`tfs extract` — the Rust tfs crate is the
+shipping dwarfs-t reader; staged next to the image as
+`dwarfs-t-bin/tfs.exe` by tools/stage), then, with an EMPTY environment
+(`env -i`, + HOME and APPDATA as the win32 profile root):
+
+1. `inkscape.exe --version` — proves the exe-directory closure is
+   self-sufficient (default OS search order only: exe dir + System32).
+2. SVG→PNG and SVG→PDF exports of `fixtures/smoke.svg` (magic + size
+   checks, as on the other legs).
+3. The objdump sweep over every extracted PE: imports ⊆ system set + `bin/`.
+
+### Proof (windows-latest runner, ucrt64 gcc 16.1)
+
+_PENDING the first green CI run on the feat/windows-leg PR — numbers
+(closure DLL count, image size, sweep stats) land here with the merge._
+
 ## Known limitations (phase A, honest list)
 
 - **Fonts**: text export resolves fonts through the host's fontconfig; the
@@ -413,6 +570,15 @@ territory, not this feedstock).
   `arm64_sonoma` bottles + host SDK target). No mount-mode smoke: mounting
   needs macFUSE (system extension, unavailable on GHA and not assumed on
   user hosts) — `tebakofs extract` is the documented degraded path.
+- windows leg: `static` exec tier (see the leg section) — the exe runs from
+  the extraction tree and sees the host filesystem only: no VFS view of
+  metanorma's mounts, no jails (a platform-API statement, spec 07 §8 tier
+  2b). A caller handing inkscape paths INSIDE a mounted image must
+  materialize them to host paths first (the windows dogfood e2e,
+  TODO.prepublish/06, owns that flow). The Win32/NT system DLL surface
+  stays outside the closure (payload floor: Windows 10/Server 2016+ UCRT
+  API sets — every supported windows). Extract-mode smoke only (tfs-cli);
+  there is no fuse driver for the dwarfs-t tools on windows.
 - `tools/publish` and the release job are wired but untagged/unexercised
   until the first real tag.
 
@@ -423,6 +589,11 @@ territory, not this feedstock).
   should be a mechanical port of the aarch64-macos work: brew at /usr/local,
   x64-osx-static triplet (mapped in `PLATFORM_MAP`, file not written yet),
   libtfs `*-macos-x86_64` assets to pin.
+- tebako-rs: `crates/tfs/src/exec_closure.rs` parses Mach-O/ELF only — the
+  install-time zero-runtime materializer needs a PE import walk (or a
+  manifest-`exec_closure` whole-directory mode) before the windows
+  inkscape entrypoint's store-tree materialization closes over its DLLs.
+  Until then the windows dispatcher would extract the bare exe.
 - Phase B: vcpkg overlay ports for the gtkmm3 ABI family → full-vcpkg dep
   set; possibly upstream dwarfs-t release assets for stage.
 - actions/cache for the vcpkg installed tree + tool cache in CI.

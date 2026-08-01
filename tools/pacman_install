@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# tools/pacman_install recipe.yml — install the windows leg's GNOME platform
+# stack (the recipe's build.pacman_packages) with msys2 pacman. Runs under
+# the setup-msys2 shell (shell: msys2 {0}): pacman is provisioning, not
+# build logic — it gets its native environment here (install scriptlets
+# need the msys /usr/bin that the BUILD steps' closed PATH keeps out).
+# The package LIST is recipe data, parsed with the ucrt64 ruby — no YAML
+# scraping in bash.
+set -euo pipefail
+
+RECIPE="${1:?usage: tools/pacman_install recipe.yml}"
+mapfile -t pkgs < <(ruby -ryaml -e 'puts(YAML.load_file(ARGV[0]).dig("build", "pacman_packages") || [])' "$RECIPE")
+if [ "${#pkgs[@]}" -eq 0 ]; then
+  echo "tools/pacman_install: no build.pacman_packages in $RECIPE — nothing to do"
+  exit 0
+fi
+echo "tools/pacman_install: pacman -S --needed ${pkgs[*]}"
+pacman -S --needed --noconfirm --noprogressbar "${pkgs[@]}"
