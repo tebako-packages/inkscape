@@ -9,7 +9,11 @@
 set -euo pipefail
 
 RECIPE="${1:?usage: tools/pacman_install recipe.yml}"
-mapfile -t pkgs < <(ruby -ryaml -e 'puts(YAML.load_file(ARGV[0]).dig("build", "pacman_packages") || [])' "$RECIPE")
+# tr -d '\r': the ucrt64 ruby is a NATIVE windows binary — its puts emits
+# \r\n on the pipe, mapfile -t strips only the \n, and a package name with
+# a trailing \r is pacman's "target not found" with the CR invisible in
+# the log (runs 30722902586/30723067505/30723408504 all died of this).
+mapfile -t pkgs < <(ruby -ryaml -e 'puts(YAML.load_file(ARGV[0]).dig("build", "pacman_packages") || [])' "$RECIPE" | tr -d '\r')
 if [ "${#pkgs[@]}" -eq 0 ]; then
   echo "tools/pacman_install: no build.pacman_packages in $RECIPE — nothing to do"
   exit 0
