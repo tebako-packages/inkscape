@@ -22,19 +22,36 @@ db_has_all() {
   done
 }
 
+# the forensic dump: alpm says "target not found" for packages the db file
+# provably carries (run 30723408504) — answer WHERE the lookup chain breaks,
+# once, in the log, instead of guessing across runs.
+forensics() {
+  echo "== pacman:"; pacman --version | head -1
+  echo "== sync dir:"; ls -la /var/lib/pacman/sync/
+  echo "== tar-level: gtkmm3 in the runner's ucrt64.db:"
+  zstd -dc /var/lib/pacman/sync/ucrt64.db 2>/dev/null | tar -t 2>/dev/null | grep -c gtkmm3 || echo "  (tar/zstd read failed)"
+  echo "== alpm-level: pacman -Sl ucrt64 | grep gtkmm:"
+  pacman -Sl ucrt64 2>/dev/null | grep gtkmm || echo "  (none)"
+  echo "== alpm-level: pacman -Sl ucrt64 | wc -l:"
+  pacman -Sl ucrt64 2>/dev/null | wc -l
+  echo "== lookup-level: -Si on a db-present package (7zip):"
+  pacman -Si mingw-w64-ucrt-x86_64-7zip >/dev/null 2>&1 && echo "  resolves" || echo "  DOES NOT RESOLVE"
+  echo "== lookup-level: -Si gtkmm3 verbatim:"
+  pacman -Si mingw-w64-ucrt-x86_64-gtkmm3 2>&1 | head -4 || true
+  echo "== pacman.conf (effective):"
+  grep -vE '^\s*#|^\s*$' /etc/pacman.conf || true
+  echo "== mounts of /var/lib/pacman:"; df -h /var/lib/pacman | tail -1
+}
+
 echo "tools/pacman_install: pacman -Sy --needed ${pkgs[*]}"
 # -Sy: refresh the sync dbs first — a missing/empty db is pacman's
 # "target not found", never the answer we want (named errors only).
 pacman -Sy --noconfirm --noprogressbar
 if ! db_has_all; then
-  # Loud recovery, never a silent fallback: dump the db facts, force a
-  # clean re-refresh, and let the install below fail verbatim with the
-  # diagnostics above it if the db still cannot resolve the list.
-  echo "tools/pacman_install: WARNING: the sync db cannot resolve the recipe packages — forcing a clean refresh" >&2
-  grep -E '^\[|^Include|^Server|^Architecture' /etc/pacman.conf || true
-  ls -la /var/lib/pacman/sync/ || true
+  echo "tools/pacman_install: WARNING: the sync db cannot resolve the recipe packages — forensics + a clean -Syy" >&2
+  forensics
   rm -f /var/lib/pacman/sync/*
   pacman -Syy --noconfirm --noprogressbar
-  db_has_all || { pacman -Sl ucrt64 2>/dev/null | head -5; } || true
+  db_has_all || { echo "tools/pacman_install: still unresolvable after -Syy — second forensics pass" >&2; forensics; }
 fi
 pacman -S --needed --noconfirm --noprogressbar "${pkgs[@]}"
