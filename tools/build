@@ -112,7 +112,10 @@ end
 vlib = File.join(vcpkg, "installed", triplet, "lib")
 # vcpkg install is incremental; run it every time so recipe port-list
 # changes take effect (already-installed ports no-op quickly).
-Tpkg.sh(vcpkg_exe, "install", *recipe.dig("build", "vcpkg", "ports"),
+ports = recipe.dig("build", "vcpkg", "ports") -
+        (recipe.dig("build", "vcpkg", "exclude_ports_per_platform", platform) || [])
+Tpkg.log("vcpkg ports (#{ports.size}): #{ports.join(' ')}")
+Tpkg.sh(vcpkg_exe, "install", *ports,
         "--triplet", triplet,
         "--overlay-triplets=#{File.join(Tpkg::ROOT, 'tools', 'triplets')}",
         "--clean-buildtrees-after-build",

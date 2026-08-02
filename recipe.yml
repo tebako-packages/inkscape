@@ -77,6 +77,22 @@ build:
       - boost-range
       - boost-unordered
 
+    # Per-platform port exclusions (subtracted from the list above; the
+    # excluded dep's supplier for that leg is documented in the matching
+    # system/brew/pacman section).
+    exclude_ports_per_platform:
+      x86_64-windows-ucrt:
+        # vcpkg's gsl is a cmake-wrapper port: its gsl sources carry NO
+        # __declspec markers, so the DLL's exports depend entirely on
+        # WINDOWS_EXPORT_ALL_SYMBOLS — and the import library it produced
+        # for x64-mingw-dynamic resolved for -lgsl but exported nothing
+        # (41/41 gsl symbols undefined at the lib2geom link, run
+        # 30726633253; the declspec-carrying ports — double-conversion
+        # & co. — link fine). gsl moves to the pacman supplier
+        # (mingw-w64-ucrt-x86_64-gsl, autotools-built — the same build
+        # upstream's own msys2 inkscape package links).
+        - gsl
+
   system_packages:          # ubuntu-24.04 (apt) names
     # toolchain
     - build-essential
@@ -156,6 +172,8 @@ build:
                              # FindIntl is unconditional. (the old umbrella
                              # 'gettext' package is gone — msys2 split it
                              # into runtime/tools/libtextstyle)
+    - mingw-w64-ucrt-x86_64-gsl        # replaces vcpkg's gsl on this leg —
+                             # see build.vcpkg.exclude_ports_per_platform
 
   cmake:
     generator: "Ninja"
