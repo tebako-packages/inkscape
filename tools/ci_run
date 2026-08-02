@@ -56,4 +56,12 @@ if [ ! -d "$GCC_INCLUDE" ]; then
 fi
 export BINDGEN_EXTRA_CLANG_ARGS="--target=x86_64-w64-mingw32 -isystem $(cygpath -m "$UCRT64")/include -isystem $(cygpath -m "$GCC_INCLUDE")"
 
+# inkscape's ConfigEnvMinGW.cmake keys off the msys2 SHELL PROFILE's
+# toolchain identity vars: MINGW_CHOST selects its arch branch (it
+# FATAL_ERRORs without it) and MINGW_PREFIX feeds its include/link dirs.
+# Export them for the one toolchain — MINGW_PREFIX in windows-native
+# form (the native cmake does not read /d/... msys paths).
+export MINGW_CHOST=x86_64-w64-mingw32
+export MINGW_PREFIX="$(cygpath -m "$UCRT64")"
+
 exec "$@"
