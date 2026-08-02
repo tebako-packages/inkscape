@@ -1,0 +1,5 @@
+# Feedstock patches are byte-sensitive artifacts: they patch sha256-pinned
+# upstream trees (never git-managed content), so git's checkout-side CRLF
+# conversion must never touch them (windows runners with core.autocrlf=true
+# otherwise rewrite them and `git apply --check` rejects the context).
+/patches/*.patch -text
