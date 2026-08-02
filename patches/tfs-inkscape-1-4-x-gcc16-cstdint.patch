@@ -1,0 +1,20 @@
+--- a/src/display/control/ctrl-handle-rendering.h
++++ b/src/display/control/ctrl-handle-rendering.h
+@@ -11,6 +11,7 @@
+  * Released under GNU GPL v2+, read the file 'COPYING' for more information.
+  */
+ 
++#include <cstdint>
+ #include <memory>
+ #include <compare>
+ 
+--- a/src/ui/syntax.h
++++ b/src/ui/syntax.h
+@@ -12,6 +12,7 @@
+ #ifndef SEEN_UI_UI_SYNTAX_H
+ #define SEEN_UI_UI_SYNTAX_H
+ 
++#include <cstdint>
+ #include <memory>
+ #include <optional>
+ #include <vector>
