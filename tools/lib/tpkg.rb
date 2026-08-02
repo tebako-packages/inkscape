@@ -440,6 +440,11 @@ module Tpkg
     userenv.dll psapi.dll dbghelp.dll powrprof.dll hid.dll wintrust.dll
     imagehlp.dll wldap32.dll normaliz.dll kernel.appcore.dll profapi.dll
     bcryptprimitives.dll
+    mscms.dll dbgeng.dll wtsapi32.dll shcore.dll
+    # ^ the WIN32-link surface of inkscape+gtk: mscms (Windows color
+    # management — DefineDependsandFlags links -lmscms), dbgeng (boost
+    # stacktrace_windbg), wtsapi32 (gdk session tracking), shcore (DPI).
+    # All ship in System32 on every supported Windows.
   ].freeze
   # API-set schema names (api-ms-win-*.dll, ext-ms-win-*.dll) are virtual
   # contracts the OS's API-set resolver maps onto System32 hosts — the ucrt
@@ -517,6 +522,7 @@ module Tpkg
 
     queue = pe_files.call
     seen = {}
+    unresolvable = []
     until queue.empty?
       f = queue.shift
       next if seen[f]
@@ -544,13 +550,21 @@ module Tpkg
           copied[key] = dest
           next
         end
-        src = resolve.call(imp) or
-          die("unresolvable non-system DLL import #{imp} (referenced by #{f.sub("#{root}/", '')}; "\
-              "suppliers: #{suppliers.join(', ')})")
+        src = resolve.call(imp)
+        if src.nil?
+          # collect, don't abort: one run must surface the WHOLE missing
+          # class (a new platform's first closure walks the full system
+          # surface), not one DLL per round-trip.
+          unresolvable << "#{imp} (referenced by #{f.sub("#{root}/", '')})"
+          next
+        end
         FileUtils.cp(src, dest)
         copied[key] = src
         queue << dest
       end
+    end
+    unless unresolvable.empty?
+      die("unresolvable non-system DLL imports (suppliers: #{suppliers.join(', ')}):\n  #{unresolvable.uniq.join("\n  ")}")
     end
 
     # verification pass: no import outside the system set + bin/ may remain
