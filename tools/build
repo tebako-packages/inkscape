@@ -52,6 +52,13 @@ if ENV["TPKG_SKIP_APT"] != "1" && system("command -v apt-get >/dev/null 2>&1") &
   end
 end
 macos = platform.end_with?("-macos")
+windows = platform.end_with?("-windows-ucrt")
+# the ucrt64 root is the windows leg's ONE supplier root (toolchain + GNOME
+# platform stack); tools/ci_run exports it. Named error, never a guess.
+ucrt64 = ENV["UCRT64"]
+if windows && (ucrt64.nil? || !File.directory?(File.join(ucrt64, "bin")))
+  Tpkg.die("windows leg needs $UCRT64 pointing at the ucrt64 root (e.g. /d/a/_temp/msys64/ucrt64) — run under tools/ci_run")
+end
 brew_pkgs = recipe.dig("build", "brew_packages") || []
 if macos && ENV["TPKG_SKIP_BREW"] != "1" && !brew_pkgs.empty?
   # Homebrew is the macOS platform-stack supplier (the apt counterpart): one
@@ -66,18 +73,49 @@ tarball = Tpkg.fetch(up["url"], File.join(Tpkg.cache_dir, "src", File.basename(u
 src = File.join(work, "src")
 unless File.directory?(src)
   FileUtils.mkdir_p(src)
-  Tpkg.sh("tar", "-xf", tarball, "-C", src, "--strip-components=1")
+  # the archive operand is a bare name on purpose: a drive-letter-leading
+  # path (D:\…) is GNU tar's rmt syntax (host:path — it tries to rsh to
+  # host "D", exit 128). chdir + basename is portable across every tar.
+  # MSYS=winsymlinks:nativestrict (windows only): the tarball ships a
+  # dangling symlink (compile_commands.json -> a path on the upstream
+  # maintainer's machine); POSIX tar creates it happily, msys tar's
+  # default copy-the-target mode fails on the missing target. Native
+  # symlinks mirror the POSIX legs exactly (the link stays dangling,
+  # the build never reads it).
+  tar_env = windows ? { "MSYS" => "winsymlinks:nativestrict" } : {}
+  Tpkg.sh("tar", "-xf", File.basename(tarball), "-C", src, "--strip-components=1",
+          chdir: File.dirname(tarball), env: tar_env)
+  # feedstock patches (conventions.md), in name order; a patch that fails
+  # `git apply --check` aborts the build, never applies partially on faith.
+  Dir[File.join(Tpkg::ROOT, "patches", "*.patch")].sort.each do |p|
+    Tpkg.sh("git", "apply", "--check", p, chdir: src, quiet: true)
+    Tpkg.sh("git", "apply", p, chdir: src)
+    Tpkg.log("applied #{File.basename(p)}")
+  end
 end
 
 # --- 3. vcpkg deps (commit-pinned) -------------------------------------------
 vcpkg = Tpkg.vcpkg_root_for(recipe)
-unless File.executable?(File.join(vcpkg, "vcpkg"))
-  Tpkg.sh(File.join(vcpkg, "bootstrap-vcpkg.sh"), "-disableMetrics", chdir: vcpkg)
+vcpkg_exe = File.join(vcpkg, windows ? "vcpkg.exe" : "vcpkg")
+unless File.executable?(vcpkg_exe)
+  if windows
+    # bootstrap-vcpkg.bat downloads the prebuilt vcpkg.exe (no compiler
+    # needed) but drives powershell, which lives outside the closed PATH —
+    # prepend it for this one child. cmd needs native path separators.
+    boot = File.join(vcpkg, "bootstrap-vcpkg.bat").tr("/", "\\")
+    Tpkg.sh("cmd", "/c", boot, "-disableMetrics", chdir: vcpkg,
+            env: { "PATH" => "C:\\Windows\\System32\\WindowsPowerShell\\v1.0;#{ENV['PATH']}" })
+  else
+    Tpkg.sh(File.join(vcpkg, "bootstrap-vcpkg.sh"), "-disableMetrics", chdir: vcpkg)
+  end
 end
 vlib = File.join(vcpkg, "installed", triplet, "lib")
 # vcpkg install is incremental; run it every time so recipe port-list
 # changes take effect (already-installed ports no-op quickly).
-Tpkg.sh(File.join(vcpkg, "vcpkg"), "install", *recipe.dig("build", "vcpkg", "ports"),
+ports = recipe.dig("build", "vcpkg", "ports") -
+        (recipe.dig("build", "vcpkg", "exclude_ports_per_platform", platform) || [])
+Tpkg.log("vcpkg ports (#{ports.size}): #{ports.join(' ')}")
+Tpkg.sh(vcpkg_exe, "install", *ports,
         "--triplet", triplet,
         "--overlay-triplets=#{File.join(Tpkg::ROOT, 'tools', 'triplets')}",
         "--clean-buildtrees-after-build",
@@ -93,11 +131,13 @@ opts = options.map { |k, v| "-D#{k}=#{v}" }
 # vcpkg's toolchain covers find_package, but pkg_check_modules (gsl, bdw-gc,
 # lcms2, …) needs PKG_CONFIG_PATH pointed at the vcpkg installed tree;
 # PKG_CONFIG_PATH prepends to the system defaults, so the platform-stack .pc
-# files (apt's gtkmm-3.0 & co. on linux, brew's on macOS) still resolve.
+# files (apt's gtkmm-3.0 & co. on linux, brew's on macOS, ucrt64's native
+# path on windows) still resolve. Separator is ";" on windows (native
+# pkgconf), ":" elsewhere.
 pkg_env = { "PKG_CONFIG_PATH" => [
   File.join(vcpkg, "installed", triplet, "lib", "pkgconfig"),
   File.join(vcpkg, "installed", triplet, "share", "pkgconfig")
-].join(":") }
+].join(windows ? ";" : ":") }
 # 2geom links bare `-lgsl`/`-lgslcblas` (no -L): give the linker the vcpkg
 # lib dir. Appended -D flags override the recipe's same-named ones.
 ld_extra = "-L#{vlib}"
@@ -159,18 +199,40 @@ if macos
   # inkscape binaries, so the dylib closure is 100% brew-supplied.
   copied = Tpkg.macos_closure(root, stamp: File.join(work, "closure-leaves.txt"))
   closure_count = copied.size
+elsif windows
+  # gdk-pixbuf loaders (dlopen'd — objdump of the binaries never sees them):
+  # copy the module tree first so the closure walk closes over them too.
+  # (loaders.cache holds absolute build-machine paths; same known limitation
+  # as the other legs — the run-time shim sets GDK_PIXBUF_MODULE_FILE, and
+  # plain SVG->PNG/PDF export never touches the loaders.)
+  gdk = File.join(ucrt64, "lib", "gdk-pixbuf-2.0")
+  FileUtils.cp_r(gdk, libd) if File.directory?(gdk)
 
-  # libtfs v0.13.0's dwarfs backend (filesystem_v2_lite) cannot READ symlink
-  # inodes: `tebakofs extract` fails on them. Resolve every payload symlink
-  # to a plain file copy — mkdwarfs dedups identical content, so the image
-  # size is unaffected. (fontconfig's etc/fonts/conf.d/*.conf are symlinks
-  # too.) Upstream follow-up: symlink support in libtfs's dwarfs backend.
-  Dir[File.join(root, "**", "*")].select { |f| File.symlink?(f) }.each do |l|
-    target = File.realpath(l)
-    FileUtils.rm(l)
-    FileUtils.cp(target, l)
-    Tpkg.log("resolved symlink #{l.sub("#{root}/", '')} -> #{File.basename(target)}")
+  # fontconfig stock config: lets the shim point FONTCONFIG_FILE into the image.
+  fonts_etc = File.join(ucrt64, "etc", "fonts")
+  if File.directory?(fonts_etc)
+    FileUtils.mkdir_p(File.join(root, "etc"))
+    FileUtils.cp_r(fonts_etc, File.join(root, "etc"))
   end
+
+  # GLib's win32 spawn-time helpers (they are not import-table material —
+  # glib resolves them next to its DLL at g_spawn/gdbus time): the pieces
+  # of upstream's neutralized InstallMSYS2 bundling the CLI payload keeps.
+  %w[gspawn-win64-helper.exe gspawn-win64-helper-console.exe gdbus.exe].each do |h|
+    src_h = File.join(ucrt64, "bin", h)
+    FileUtils.cp(src_h, File.join(root, "bin", h)) if File.exist?(src_h)
+  end
+
+  # PE/DLL closure: objdump import walk, the Win32/NT API surface excluded,
+  # supplier DLLs flat into bin/ next to the exe (PE has no RPATH — the
+  # loader searches the exe's directory first). Suppliers are vcpkg-first:
+  # on name collisions (zlib1.dll, libpng16-16.dll) the vcpkg build wins —
+  # it is the symbol superset we linked (the linux leg's SONAME rule).
+  copied = Tpkg.windows_closure(root, suppliers: [
+    File.join(vcpkg, "installed", triplet, "bin"),
+    File.join(ucrt64, "bin")
+  ])
+  closure_count = copied.size
 else
   search = [vlib, libd] # vcpkg first: on SONAME collisions (libpng/zlib) the
                         # vcpkg build wins — it is the symbol superset we linked
@@ -221,11 +283,27 @@ else
   closure_count = copied.size
 end
 
+if macos || windows
+  # Resolve every payload symlink to a plain file copy. macOS: libtfs
+  # v0.13.0's dwarfs backend (filesystem_v2_lite) cannot READ symlink inodes
+  # (fontconfig's etc/fonts/conf.d/*.conf are symlinks too; upstream
+  # follow-up: symlink support there). windows: pacman trees can carry msys
+  # symlinks, and extraction on a windows host cannot count on symlink
+  # creation privileges. mkdwarfs dedups identical content either way, so
+  # the image size is unaffected.
+  Dir[File.join(root, "**", "*")].select { |f| File.symlink?(f) }.each do |l|
+    target = File.realpath(l)
+    FileUtils.rm(l)
+    FileUtils.cp(target, l)
+    Tpkg.log("resolved symlink #{l.sub("#{root}/", '')} -> #{File.basename(target)}")
+  end
+end
+
 # prune payload dead weight the CLI never reads (87 MB of tutorial SVGs)
 FileUtils.rm_rf(File.join(root, "share", "inkscape", "tutorials"))
 
 # --- 6. strip (+codesign) + pre-image smoke (empty env: @loader_path/$ORIGIN
-#         must suffice) -------------------------------------------------------
+#         / the exe-directory rule must suffice) --------------------------------
 if macos
   # GNU strip flags don't exist on macOS; -x removes local symbols only —
   # the safe form for dylibs. codesign AFTER strip: both strip and
@@ -234,13 +312,22 @@ if macos
   machos = Dir[File.join(root, "**", "*")].select { |f| Tpkg.macho?(f) }
   Tpkg.sh("strip", "-x", *machos) unless machos.empty?
   Tpkg.codesign_tree(root)
+elsif windows
+  # ucrt64 binutils strip.exe (unprefixed — same toolchain rule as objdump);
+  # PE exports live in .edata, --strip-unneeded is the msys2-standard form.
+  pes = Dir[File.join(root, "bin", "*.{exe,dll}"), File.join(root, "lib", "**", "*.dll")].select { |f| Tpkg.pe?(f) }
+  Tpkg.sh("strip", "--strip-unneeded", *pes) unless pes.empty?
 else
   Tpkg.sh("sh", "-c", "find #{Shellwords.escape(root)} -name '*.so*' -type f -exec strip --strip-unneeded {} +")
   Tpkg.sh("strip", File.join(root, "bin", "inkscape"))
 end
 require "tmpdir"
 home = Dir.mktmpdir
-out_txt, ok = Tpkg.capture(File.join(root, "bin", "inkscape"), "--version", env: { "HOME" => home })
+exe = File.join(root, "bin", windows ? "inkscape.exe" : "inkscape")
+# APPDATA is the win32 profile root (the HOME analog): redirecting it keeps
+# inkscape's first-run profile writes out of the payload tree.
+smoke_env = { "HOME" => home }.merge(windows ? { "APPDATA" => home } : {})
+out_txt, ok = Tpkg.capture(exe, "--version", env: smoke_env)
 Tpkg.die("pre-image smoke failed:\n#{out_txt}") unless ok
 Tpkg.log("pre-image smoke: #{out_txt.lines.first&.strip}")
 if macos

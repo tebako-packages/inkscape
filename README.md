@@ -12,7 +12,8 @@ conventions and the feedstock template live in
   `link_mode: dynamic`, `rpath_origin: true`, vcpkg + apt dep provenance,
   platforms.
 - `tools/` — `emit_matrix`, `build`, `stage`, `boot_smoke`, `publish`
-  (ruby; thin YAML, logic here).
+  (ruby), plus the windows-leg helpers `ci_run` (the closed ucrt64 env)
+  and `pacman_install` (GNOME stack provisioning) — thin YAML, logic here.
 - `manifests/payload.yaml` — payload manifest template (spec 03), filled
   by `tools/stage`.
 - `fixtures/smoke.svg` — boot-smoke export fixture.

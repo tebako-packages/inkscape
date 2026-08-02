@@ -29,7 +29,21 @@ Tpkg.die("payload tree #{root} missing — run tools/build first") unless File.d
 tools = Tpkg.ensure_dwarfs_tools(recipe, platform: platform)
 # ship the mounter tools alongside the image: boot_smoke (and users) get a
 # known-good tool set for this exact payload (dwarfs-t trio on linux,
-# mkdwarfs+tebakofs from libtfs on macOS)
+# mkdwarfs+tebakofs from libtfs on macOS). On windows the mounter/reader is
+# tfs-cli (built in-leg): stage it as tfs.exe for boot_smoke.
+windows = platform.end_with?("-windows-ucrt")
+if windows
+  want = ENV.fetch("TFS_CLI", "tfs")
+  names = File.extname(want).empty? ? [want, "#{want}.exe"] : [want]
+  resolved = if File.executable?(want) && !File.directory?(want)
+               want
+             else
+               ENV["PATH"].split(";").flat_map { |d| names.map { |n| File.join(d, n) } }
+                 .find { |p| File.executable?(p) && !File.directory?(p) }
+             end
+  Tpkg.die("windows leg: the tfs-cli imager not found (TFS_CLI=#{want}) — build it in-leg first") unless resolved
+  tools["tfs.exe"] = resolved
+end
 tbin = File.join(out_dir, "dwarfs-t-bin")
 FileUtils.mkdir_p(tbin)
 tools.each_value { |t| FileUtils.cp(t, tbin) if t && File.executable?(t) }
@@ -47,6 +61,7 @@ filled = tpl
          .gsub("@@CREATED@@", Time.now.utc.strftime("%Y-%m-%dT%H:%M:%SZ"))
          .gsub("@@UPSTREAM_SHA256@@", recipe.dig("upstream", "sha256"))
          .gsub("@@FEEDSTOCK_SHA@@", feedstock_sha)
+         .gsub("@@EXE_SUFFIX@@", windows ? ".exe" : "")
          .gsub(/platforms: \[.*\]/, "platforms: [#{platform}]")
 
 # the embedded copy: blob_sha256 is the fixed-point placeholder (the image
@@ -57,7 +72,7 @@ FileUtils.mkdir_p(tpkg_dir)
 File.write(File.join(tpkg_dir, "manifest.yaml"), embedded)
 Tpkg.log("embedded manifest #{File.join(tpkg_dir, 'manifest.yaml')}")
 
-tfs = ENV.fetch("TFS_CLI", "tfs")
+tfs = windows ? tools["tfs.exe"] : ENV.fetch("TFS_CLI", "tfs")
 Tpkg.sh(tfs, "mkimage", "--format", "dwarfs", root, "--output", img)
 digest = Tpkg.sha256(img)
 File.write("#{img}.sha256", "#{digest}  #{File.basename(img)}\n")

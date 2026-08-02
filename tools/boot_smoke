@@ -17,6 +17,7 @@ out_dir = ARGV[0] or Tpkg.die("usage: tools/boot_smoke out/<platform>")
 img = Dir[File.join(out_dir, "*.{dwarfs,tfs}")].first or Tpkg.die("no .dwarfs/.tfs image in #{out_dir}")
 platform = File.basename(img).sub(/\Ainkscape-[\d.]+-/, "").sub(/\.(dwarfs|tfs)\z/, "")
 macos = platform.end_with?("-macos")
+windows = platform.end_with?("-windows-ucrt")
 recipe = Tpkg.recipe(File.join(Tpkg::ROOT, "recipe.yml"))
 tools = Tpkg.ensure_dwarfs_tools(recipe, platform: platform)
 # prefer the image tools staged next to the image (same run's build/download)
@@ -29,17 +30,32 @@ Dir[File.join(out_dir, "dwarfs-t-bin", "*-macos-*")].each do |f|
   t = File.basename(f).sub(/-macos-(arm64|x86_64)\z/, "")
   tools[t] = f if File.executable?(f)
 end
+# windows: the reader is tfs-cli, staged as tfs.exe by tools/stage
+if windows
+  staged = File.join(out_dir, "dwarfs-t-bin", "tfs.exe")
+  tools["tfs.exe"] = staged if File.executable?(staged)
+  tools["tfs.exe"] ||= ENV["TFS_CLI"] if ENV["TFS_CLI"] && File.executable?(ENV["TFS_CLI"])
+  Tpkg.die("windows boot smoke needs the staged tfs.exe (run tools/stage first) or $TFS_CLI") unless tools["tfs.exe"]
+end
 
 # the dwarfs fuse driver needs fusermount3 (setuid helper); CI runners and
 # slim containers have /dev/fuse but no fuse3 package
-if !macos && !system("command -v fusermount3 >/dev/null 2>&1") && system("command -v apt-get >/dev/null 2>&1")
+if !macos && !windows && !system("command -v fusermount3 >/dev/null 2>&1") && system("command -v apt-get >/dev/null 2>&1")
   sudo = Process.uid.zero? ? [] : ["sudo"]
   Tpkg.sh(*sudo, "apt-get", "install", "-y", "-qq", "fuse3")
 end
 
 mnt = nil
 extracted = nil
-if !macos && tools["dwarfs"] && File.exist?("/dev/fuse")
+if windows
+  # FUSE is not an exec mechanism (spec 07 §8) and there is no dwarfs fuse
+  # driver on windows at all: extraction with the staged tfs-cli is THE
+  # smoke path here (the static tier's run-time form is also extraction —
+  # the zero-runtime store tree).
+  extracted = Dir.mktmpdir("tpkg-extract")
+  Tpkg.sh(tools["tfs.exe"], "extract", "-d", extracted, img)
+  point = extracted
+elsif !macos && tools["dwarfs"] && File.exist?("/dev/fuse")
   mnt = Dir.mktmpdir("tpkg-mnt")
   # foreground (-f, honored by libfuse): keeps driver output on the log and
   # the process under our control; poll briefly for the mount to appear
@@ -71,12 +87,16 @@ else
 end
 
 begin
-  bin = File.join(point, "bin", "inkscape")
+  bin = File.join(point, "bin", windows ? "inkscape.exe" : "inkscape")
   Tpkg.die("#{bin} missing in image") unless File.exist?(bin)
 
   home = Dir.mktmpdir("tpkg-home")
-  # env -i: empty environment (+ HOME only) — proves $ORIGIN closure.
-  ver, ok = Tpkg.capture("env", "-i", "HOME=#{home}", bin, "--version")
+  # env -i: empty environment (+ HOME, + APPDATA as the win32 profile root)
+  # — proves the closure is self-sufficient ($ORIGIN / @loader_path / the
+  # exe-directory rule).
+  env_prefix = ["env", "-i", "HOME=#{home}"]
+  env_prefix << "APPDATA=#{home}" if windows
+  ver, ok = Tpkg.capture(*env_prefix, bin, "--version")
   Tpkg.die("inkscape --version failed:\n#{ver}") unless ok && ver =~ /Inkscape 1\./
   Tpkg.log("boot: #{ver.lines.first.strip}")
 
@@ -101,6 +121,18 @@ begin
     end
     Tpkg.die("otool sweep failed (leak/unresolved):\n  #{bad.join("\n  ")}") unless bad.empty?
     Tpkg.log("otool sweep: #{sweep.size} Mach-O files clean (no brew leaks beyond the closure)")
+  elsif windows
+    # objdump sweep: imports must be the Win32/NT system set or a DLL present
+    # in bin/ next to the exe — anything else can never resolve at run time.
+    sweep = Dir[File.join(point, "bin", "*.{exe,dll}"), File.join(point, "lib", "**", "*.dll")].select { |f| Tpkg.pe?(f) }
+    sweep.each do |f|
+      Tpkg.objdump_imports(f).each do |imp|
+        next if Tpkg.windows_system_dll?(imp)
+        bad << "#{f}: #{imp}" unless File.exist?(File.join(point, "bin", File.basename(imp)))
+      end
+    end
+    Tpkg.die("objdump sweep failed (import outside the system set + bin/):\n  #{bad.join("\n  ")}") unless bad.empty?
+    Tpkg.log("objdump sweep: #{sweep.size} PE files clean (system set + bin/ closure only)")
   else
     # ldd sweep: nothing may resolve to "not found"
     sweep = Dir[File.join(point, "bin", "*"), File.join(point, "lib", "**", "*.so*")].select { |f| Tpkg.elf?(f) }
@@ -115,7 +147,7 @@ begin
   Dir.mktmpdir("tpkg-export") do |tmp|
     png = File.join(tmp, "smoke.png")
     pdf = File.join(tmp, "smoke.pdf")
-    out1, ok1 = Tpkg.capture("env", "-i", "HOME=#{home}", bin, fixture, "--export-type=png", "--export-filename=#{png}")
+    out1, ok1 = Tpkg.capture(*env_prefix, bin, fixture, "--export-type=png", "--export-filename=#{png}")
     Tpkg.die("SVG->PNG export failed:\n#{out1}") unless ok1 && File.exist?(png)
     # .b: the file read is ASCII-8BIT; a bare "\x89" literal is UTF-8, and
     # == across incompatible encodings is false even with identical bytes.
@@ -123,7 +155,7 @@ begin
     Tpkg.die("PNG too small (#{File.size(png)} B)") if File.size(png) < 1000
     Tpkg.log("export: smoke.svg -> PNG (#{File.size(png)} B)")
 
-    out2, ok2 = Tpkg.capture("env", "-i", "HOME=#{home}", bin, fixture, "--export-type=pdf", "--export-filename=#{pdf}")
+    out2, ok2 = Tpkg.capture(*env_prefix, bin, fixture, "--export-type=pdf", "--export-filename=#{pdf}")
     Tpkg.die("SVG->PDF export failed:\n#{out2}") unless ok2 && File.exist?(pdf)
     Tpkg.die("PDF magic mismatch") unless File.open(pdf, "rb") { |f| f.read(5) } == "%PDF-"
     Tpkg.log("export: smoke.svg -> PDF (#{File.size(pdf)} B)")

@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# tools/ci_run — run one feedstock command under the windows leg's closed
+# ucrt64 environment, then exit with its status. Every windows step of the
+# workflow goes through here (build, imager build, stage, boot-smoke) so the
+# env discipline lives in exactly one reviewed place, not inline YAML
+# (tebako-rs ci/windows-gnu-cli.sh's proven shape — same toolchain rule):
+#
+#   - ONE toolchain: the setup-msys2 ucrt64 gcc. Its bin dir leads the PATH.
+#   - Closed PATH: ucrt64/bin + Git's usr/bin (coreutils — PROVEN safe; the
+#     ABI clash is specifically setup-msys2's /usr/bin, which stays OFF —
+#     vcpkg downloads its OWN msys2 for the autotools ports and the two
+#     runtimes clash) + Git's cmd (git.exe) + cargo + System32. No choco
+#     mingw, no stray runner toolchains (first-DLL-wins resolution is
+#     STATUS_ENTRYPOINT_NOT_FOUND at process start).
+#   - The make toolshim: ucrt64 ships only mingw32-make.exe; botan-src
+#     (rnp vendored in tebako-signer, a tfs-cli dep) spawns plain `make`.
+#     A COPY, not a symlink — Git-bash "symlinks" are text files to
+#     CreateProcess.
+#   - gcc.exe as cargo's linker + the static-mingw-runtimes RUSTFLAGS tail
+#     (-lmsvcrt restores the msvcrt-after-mingwex order invariant rustc's
+#     -nodefaultlibs tail violates).
+#   - BOTAN_CONFIGURE_CC=gcc: botan's configure.py defaults to MSVC on
+#     os=windows and there is no cl on the closed PATH.
+#   - BINDGEN_EXTRA_CLANG_ARGS: rnp-rs's bindgen drives the runner image's
+#     libclang in MSVC mode; with no mingw header dirs it dies on
+#     <stdbool.h> (tebako-rs run 30714614829). Paths MUST be windows-native
+#     (cygpath -m): libclang is a native binary and silently ignores
+#     msys-style /d/... -isystem dirs (openjdk feedstock run 30719756048
+#     proved the silent-ignore kills the build).
+#
+# Exports UCRT64 for the build tools (the closure's supplier root).
+set -euo pipefail
+
+MSYS2_ROOT="${MSYS2_ROOT:-/d/a/_temp/msys64}"
+export UCRT64="$MSYS2_ROOT/ucrt64"
+if [ ! -x "$UCRT64/bin/gcc.exe" ]; then
+  echo "tools/ci_run: ucrt64 toolchain missing at $UCRT64 (setup-msys2 step must run first)" >&2
+  exit 1
+fi
+
+export PATH="$UCRT64/bin:/c/Program Files/Git/usr/bin:/c/Program Files/Git/cmd:/c/Users/runneradmin/.cargo/bin:/c/Windows/System32"
+
+TOOLSHIM=/d/a/_temp/tpkg-toolshim
+mkdir -p "$TOOLSHIM"
+cp "$UCRT64/bin/mingw32-make.exe" "$TOOLSHIM/make.exe"
+export PATH="$TOOLSHIM:$PATH"
+
+export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=gcc.exe
+export RUSTFLAGS="-C link-arg=-static-libgcc -C link-arg=-static-libstdc++ -C link-arg=-lmsvcrt"
+export BOTAN_CONFIGURE_CC=gcc
+
+GCC_INCLUDE=$(echo "$UCRT64"/lib/gcc/x86_64-w64-mingw32/*/include)
+if [ ! -d "$GCC_INCLUDE" ]; then
+  echo "tools/ci_run: ucrt64 gcc include dir not found under $UCRT64/lib/gcc — toolchain layout changed" >&2
+  exit 1
+fi
+export BINDGEN_EXTRA_CLANG_ARGS="--target=x86_64-w64-mingw32 -isystem $(cygpath -m "$UCRT64")/include -isystem $(cygpath -m "$GCC_INCLUDE")"
+
+# inkscape's ConfigEnvMinGW.cmake keys off the msys2 SHELL PROFILE's
+# toolchain identity vars: MINGW_CHOST selects its arch branch (it
+# FATAL_ERRORs without it) and MINGW_PREFIX feeds its include/link dirs.
+# Export them for the one toolchain — MINGW_PREFIX in windows-native
+# form (the native cmake does not read /d/... msys paths).
+export MINGW_CHOST=x86_64-w64-mingw32
+export MINGW_PREFIX="$(cygpath -m "$UCRT64")"
+
+exec "$@"

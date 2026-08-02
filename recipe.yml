@@ -11,20 +11,34 @@ upstream:
 
 build:
   system: cmake
-  link_mode: dynamic       # preload-shim exec tier (docs/conventions.md)
+  link_mode: dynamic       # preload-shim exec tier (docs/conventions.md) —
+                           # POSIX legs. The WINDOWS leg runs the static tier
+                           # instead (see the exec_tier note at the bottom):
+                           # no LD_PRELOAD exists on windows and libtfs-preload
+                           # is POSIX-only, so the payload extracts and runs
+                           # from the store tree (DLLs next to the exe — PE
+                           # has no RPATH; the loader searches the exe's
+                           # directory first).
   rpath_origin: true       # $ORIGIN-relative RPATH wired at BUILD time via
                            # --disable-new-dtags; no patchelf/chrpath anywhere
+                           # (ELF legs; PE has no RPATH — the windows closure
+                           # lands flat in bin/ next to the exe)
   deps: []                 # no feedstock deps
 
   # Dependency provenance (full rationale in docs/build-notes.md):
   #  * vcpkg (pinned commit) builds inkscape's non-GNOME deps — shared libs on
   #    linux, static on macOS (arm64-osx-static: they link into the binaries
-  #    and drop out of the dylib closure entirely).
+  #    and drop out of the dylib closure entirely), DLLs on windows
+  #    (x64-mingw-dynamic, a community triplet — they join the PE/DLL closure).
   #  * The GNOME platform stack (gtkmm-3.0 ABI family) comes from the OS
-  #    package manager — ubuntu-24.04 apt on linux, Homebrew bottles on macOS:
-  #    modern vcpkg ships only gtkmm4/glibmm-2.68 and no libsigc++-2.0 or
-  #    potrace, while inkscape 1.4.x hard-requires gtkmm-3.0 >= 3.24. One
-  #    self-consistent supplier per platform, same rule both legs.
+  #    package manager — ubuntu-24.04 apt on linux, Homebrew bottles on macOS,
+  #    msys2 pacman (ucrt64) on windows: modern vcpkg ships only
+  #    gtkmm4/glibmm-2.68 and no libsigc++-2.0 or potrace, while inkscape
+  #    1.4.x hard-requires gtkmm-3.0 >= 3.24. One self-consistent supplier
+  #    per platform, same rule on every leg. (ucrt64 is also THE windows
+  #    toolchain — the same gcc family the ruby runtime factory and the
+  #    vcpkg baseline use; inkscape's official windows packages are built
+  #    with exactly this stack, which pins the porting risk to the closure.)
   vcpkg:
     git: "https://github.com/microsoft/vcpkg.git"
     commit: "cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3"   # tag 2026.06.24 (annotated tag object 52c9e08c)
@@ -62,6 +76,22 @@ build:
       - boost-ptr-container
       - boost-range
       - boost-unordered
+
+    # Per-platform port exclusions (subtracted from the list above; the
+    # excluded dep's supplier for that leg is documented in the matching
+    # system/brew/pacman section).
+    exclude_ports_per_platform:
+      x86_64-windows-ucrt:
+        # vcpkg's gsl is a cmake-wrapper port: its gsl sources carry NO
+        # __declspec markers, so the DLL's exports depend entirely on
+        # WINDOWS_EXPORT_ALL_SYMBOLS — and the import library it produced
+        # for x64-mingw-dynamic resolved for -lgsl but exported nothing
+        # (41/41 gsl symbols undefined at the lib2geom link, run
+        # 30726633253; the declspec-carrying ports — double-conversion
+        # & co. — link fine). gsl moves to the pacman supplier
+        # (mingw-w64-ucrt-x86_64-gsl, autotools-built — the same build
+        # upstream's own msys2 inkscape package links).
+        - gsl
 
   system_packages:          # ubuntu-24.04 (apt) names
     # toolchain
@@ -124,6 +154,27 @@ build:
     - gettext                # keg-only; upstream's FindIntl is unconditional
     - libomp                 # WITH_OPENMP parity with the linux leg (keg-only)
 
+  pacman_packages:          # windows leg: msys2 ucrt64 is the platform-stack
+                            # supplier (the apt/brew counterpart — ONE
+                            # self-consistent source, same rule). Installed by
+                            # tools/pacman_install under the msys2 shell;
+                            # the toolchain itself comes from setup-msys2.
+                            # mingw-w64-ucrt-x86_64-gtkmm3 pulls the whole
+                            # gtkmm-3.0 ABI family (glibmm-2.4, cairomm-1.0,
+                            # pangomm-1.4, atkmm-1.6, libsigc++-2.0 + gtk3/
+                            # glib2/pango/cairo/harfbuzz/fontconfig/freetype/
+                            # gdk-pixbuf2) — the set apt's libgtkmm-3.0-dev
+                            # and brew's gtkmm3 serve on the other legs.
+    - mingw-w64-ucrt-x86_64-gtkmm3
+    - mingw-w64-ucrt-x86_64-libepoxy   # must match the gtk3 build (same supplier)
+    - mingw-w64-ucrt-x86_64-potrace    # 'potrace' port is absent from vcpkg
+    - mingw-w64-ucrt-x86_64-gettext-runtime  # libintl.h + libintl-8.dll:
+                             # FindIntl is unconditional. (the old umbrella
+                             # 'gettext' package is gone — msys2 split it
+                             # into runtime/tools/libtextstyle)
+    - mingw-w64-ucrt-x86_64-gsl        # replaces vcpkg's gsl on this leg —
+                             # see build.vcpkg.exclude_ports_per_platform
+
   cmake:
     generator: "Ninja"
     build_type: "Release"
@@ -162,6 +213,14 @@ build:
       CMAKE_EXE_LINKER_FLAGS: "-Wl,-rpath,@loader_path/../lib"
       CMAKE_SHARED_LINKER_FLAGS: "-Wl,-rpath,@loader_path/../lib"
       CMAKE_MODULE_LINKER_FLAGS: "-Wl,-rpath,@loader_path/../lib"
+    x86_64-windows-ucrt:
+      # PE has no RPATH: --disable-new-dtags is ELF-only, so the global flags
+      # are cleared here (tools/build re-appends the vcpkg -L path). DLL
+      # resolution is the exe-directory rule instead: the closure lands flat
+      # in bin/ next to inkscape.exe and needs no link-time wiring at all.
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_SHARED_LINKER_FLAGS: ""
+      CMAKE_MODULE_LINKER_FLAGS: ""
 
 image:
   format: dwarfs
@@ -187,14 +246,30 @@ image:
 
 # phase A: x86_64-linux-gnu + aarch64-macos (macOS dogfood leg);
 # aarch64-linux-gnu and x86_64-macos legs follow.
+# x86_64-windows-ucrt: the mingw port of the dependency closure (ucrt64 gcc
+# toolchain, pacman GNOME stack, PE/DLL closure into bin/ — the static exec
+# tier, see below).
 platforms:
   - x86_64-linux-gnu
   - aarch64-macos
+  - x86_64-windows-ucrt
 
 provides:
   executables:
+    # the windows image carries /bin/inkscape.exe (stage fills the suffix)
     - {name: "inkscape", path: "/bin/inkscape", version: "1.4.3"}
   libraries: []
 
-exec_tier: dynamic         # from build.link_mode
+exec_tier: dynamic         # from build.link_mode — POSIX legs. The windows
+                           # leg is the STATIC tier (spec 07 §8 tier 2b,
+                           # extract-to-exec-cache): tier 1's preload shim
+                           # does not exist on windows (libtfs-preload is
+                           # POSIX-only, "windows later"), and no link-time
+                           # interposition archive ships for payload exes
+                           # (the tebako-rs link-unit is the RUNTIME driver
+                           # unit, not a CRT interposition shim; a GLib app's
+                           # windows IO surface is the Win32 API, which GNU
+                           # ld --wrap cannot reach). The zero-runtime
+                           # dispatcher execs the materialized exe; the PE
+                           # closure in bin/ makes it self-sufficient.
 exec_closure: []

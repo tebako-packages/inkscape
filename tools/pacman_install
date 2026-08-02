@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# tools/pacman_install recipe.yml — install the windows leg's GNOME platform
+# stack (the recipe's build.pacman_packages) with msys2 pacman. Runs under
+# the setup-msys2 shell (shell: msys2 {0}): pacman is provisioning, not
+# build logic — it gets its native environment here (install scriptlets
+# need the msys /usr/bin that the BUILD steps' closed PATH keeps out).
+# The package LIST is recipe data, parsed with the ucrt64 ruby — no YAML
+# scraping in bash.
+set -euo pipefail
+
+RECIPE="${1:?usage: tools/pacman_install recipe.yml}"
+# tr -d '\r': the ucrt64 ruby is a NATIVE windows binary — its puts emits
+# \r\n on the pipe, mapfile -t strips only the \n, and a package name with
+# a trailing \r is pacman's "target not found" with the CR invisible in
+# the log (runs 30722902586/30723067505/30723408504 all died of this).
+mapfile -t pkgs < <(ruby -ryaml -e 'puts(YAML.load_file(ARGV[0]).dig("build", "pacman_packages") || [])' "$RECIPE" | tr -d '\r')
+if [ "${#pkgs[@]}" -eq 0 ]; then
+  echo "tools/pacman_install: no build.pacman_packages in $RECIPE — nothing to do"
+  exit 0
+fi
+
+db_has_all() {
+  local p
+  for p in "${pkgs[@]}"; do
+    pacman -Si "$p" >/dev/null 2>&1 || return 1
+  done
+}
+
+# the forensic dump: alpm says "target not found" for packages the db file
+# provably carries (run 30723408504) — answer WHERE the lookup chain breaks,
+# once, in the log, instead of guessing across runs.
+forensics() {
+  echo "== pacman:"; pacman --version | head -1
+  echo "== sync dir:"; ls -la /var/lib/pacman/sync/
+  echo "== tar-level: gtkmm3 in the runner's ucrt64.db:"
+  zstd -dc /var/lib/pacman/sync/ucrt64.db 2>/dev/null | tar -t 2>/dev/null | grep -c gtkmm3 || echo "  (tar/zstd read failed)"
+  echo "== alpm-level: pacman -Sl ucrt64 | grep gtkmm:"
+  pacman -Sl ucrt64 2>/dev/null | grep gtkmm || echo "  (none)"
+  echo "== alpm-level: pacman -Sl ucrt64 | wc -l:"
+  pacman -Sl ucrt64 2>/dev/null | wc -l
+  echo "== lookup-level: -Si on a db-present package (7zip):"
+  pacman -Si mingw-w64-ucrt-x86_64-7zip >/dev/null 2>&1 && echo "  resolves" || echo "  DOES NOT RESOLVE"
+  echo "== lookup-level: -Si gtkmm3 verbatim:"
+  pacman -Si mingw-w64-ucrt-x86_64-gtkmm3 2>&1 | head -4 || true
+  echo "== pacman.conf (effective):"
+  grep -vE '^\s*#|^\s*$' /etc/pacman.conf || true
+  echo "== mounts of /var/lib/pacman:"; df -h /var/lib/pacman | tail -1
+}
+
+echo "tools/pacman_install: pacman -Sy --needed ${pkgs[*]}"
+# -Sy: refresh the sync dbs first — a missing/empty db is pacman's
+# "target not found", never the answer we want (named errors only).
+pacman -Sy --noconfirm --noprogressbar
+if ! db_has_all; then
+  echo "tools/pacman_install: WARNING: the sync db cannot resolve the recipe packages — forensics + a clean -Syy" >&2
+  forensics
+  rm -f /var/lib/pacman/sync/*
+  pacman -Syy --noconfirm --noprogressbar
+  db_has_all || { echo "tools/pacman_install: still unresolvable after -Syy — second forensics pass" >&2; forensics; }
+fi
+pacman -S --needed --noconfirm --noprogressbar "${pkgs[@]}"

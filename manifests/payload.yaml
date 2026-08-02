@@ -16,8 +16,8 @@ identity:
   annotations: {}
 provides:
   executables:
-    - {name: "inkscape", path: "/bin/inkscape", version: "@@VERSION@@"}
+    - {name: "inkscape", path: "/bin/inkscape@@EXE_SUFFIX@@", version: "@@VERSION@@"}
   libraries: []
-  platforms: [x86_64-linux-gnu, aarch64-linux-gnu, aarch64-macos, x86_64-macos]
+  platforms: [x86_64-linux-gnu, aarch64-linux-gnu, aarch64-macos, x86_64-macos, x86_64-windows-ucrt]
   capabilities: {exec: true, read: true}
 requires: []             # toolkit deps: {kind: toolkit, name, constraint, mount}
