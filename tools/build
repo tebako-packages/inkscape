@@ -76,7 +76,15 @@ unless File.directory?(src)
   # the archive operand is a bare name on purpose: a drive-letter-leading
   # path (D:\…) is GNU tar's rmt syntax (host:path — it tries to rsh to
   # host "D", exit 128). chdir + basename is portable across every tar.
-  Tpkg.sh("tar", "-xf", File.basename(tarball), "-C", src, "--strip-components=1", chdir: File.dirname(tarball))
+  # MSYS=winsymlinks:nativestrict (windows only): the tarball ships a
+  # dangling symlink (compile_commands.json -> a path on the upstream
+  # maintainer's machine); POSIX tar creates it happily, msys tar's
+  # default copy-the-target mode fails on the missing target. Native
+  # symlinks mirror the POSIX legs exactly (the link stays dangling,
+  # the build never reads it).
+  tar_env = windows ? { "MSYS" => "winsymlinks:nativestrict" } : {}
+  Tpkg.sh("tar", "-xf", File.basename(tarball), "-C", src, "--strip-components=1",
+          chdir: File.dirname(tarball), env: tar_env)
 end
 
 # --- 3. vcpkg deps (commit-pinned) -------------------------------------------
