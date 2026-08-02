@@ -85,6 +85,13 @@ unless File.directory?(src)
   tar_env = windows ? { "MSYS" => "winsymlinks:nativestrict" } : {}
   Tpkg.sh("tar", "-xf", File.basename(tarball), "-C", src, "--strip-components=1",
           chdir: File.dirname(tarball), env: tar_env)
+  # feedstock patches (conventions.md), in name order; a patch that fails
+  # `git apply --check` aborts the build, never applies partially on faith.
+  Dir[File.join(Tpkg::ROOT, "patches", "*.patch")].sort.each do |p|
+    Tpkg.sh("git", "apply", "--check", p, chdir: src, quiet: true)
+    Tpkg.sh("git", "apply", p, chdir: src)
+    Tpkg.log("applied #{File.basename(p)}")
+  end
 end
 
 # --- 3. vcpkg deps (commit-pinned) -------------------------------------------
@@ -203,6 +210,14 @@ elsif windows
   if File.directory?(fonts_etc)
     FileUtils.mkdir_p(File.join(root, "etc"))
     FileUtils.cp_r(fonts_etc, File.join(root, "etc"))
+  end
+
+  # GLib's win32 spawn-time helpers (they are not import-table material —
+  # glib resolves them next to its DLL at g_spawn/gdbus time): the pieces
+  # of upstream's neutralized InstallMSYS2 bundling the CLI payload keeps.
+  %w[gspawn-win64-helper.exe gspawn-win64-helper-console.exe gdbus.exe].each do |h|
+    src_h = File.join(ucrt64, "bin", h)
+    FileUtils.cp(src_h, File.join(root, "bin", h)) if File.exist?(src_h)
   end
 
   # PE/DLL closure: objdump import walk, the Win32/NT API surface excluded,

@@ -1,0 +1,15 @@
+--- a/CMakeScripts/InstallMSYS2.cmake
++++ b/CMakeScripts/InstallMSYS2.cmake
+@@ -1,5 +1,12 @@
+ if(WIN32)
++  # tebako payload (feedstock patch tfs-inkscape-1-4-x-no-install-msys2-bundling):
++  # upstream's installer bundling is out of scope here — it queries pacman
++  # at configure time (unavailable in the closed build env), GLOB-installs
++  # pacman DLLs over the feedstock closure's ordered-supplier rule
++  # (vcpkg-first), and bundles python/tcl/gdb, which the CLI payload ships
++  # on no leg. DLL/data provenance has ONE owner: the closure walk.
++  return()
+   install(FILES
+     NEWS.md
+     README.md
+     DESTINATION .)
