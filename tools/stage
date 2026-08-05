@@ -74,6 +74,27 @@ Tpkg.log("embedded manifest #{File.join(tpkg_dir, 'manifest.yaml')}")
 
 tfs = windows ? tools["tfs.exe"] : ENV.fetch("TFS_CLI", "tfs")
 Tpkg.sh(tfs, "mkimage", "--format", "dwarfs", root, "--output", img)
+
+# --- read-back: a broken payload fails THIS leg, never the publish -----
+# Re-read the image with the same tfs CLI that wrote it: the embedded
+# tier-1 manifest must exist and parse as YAML, and every entrypoint it
+# declares must exist in the image — proven here, before any upload.
+Tpkg.log("read-back validation of #{img}")
+cat_out, cat_ok = Tpkg.capture(tfs, "cat", img, "/__tpkg__/manifest.yaml")
+Tpkg.die("read-back FAILED — no /__tpkg__/manifest.yaml in #{img}: #{cat_out}") unless cat_ok
+doc = begin
+  YAML.load(cat_out)
+rescue Psych::Exception => e
+  Tpkg.die("read-back FAILED — embedded manifest is not valid YAML: #{e.message}")
+end
+Tpkg.die("read-back FAILED — embedded manifest is not a mapping") unless doc.is_a?(Hash)
+entries = (doc.dig("provides", "executables") || []) + (doc.dig("provides", "entrypoints") || [])
+entries.each do |entry|
+  stat_out, stat_ok = Tpkg.capture(tfs, "stat", img, entry["path"])
+  Tpkg.die("read-back FAILED — declared entrypoint #{entry['path']} missing from #{img}: #{stat_out}") unless stat_ok
+  Tpkg.log("read-back: #{entry['path']} present")
+end
+
 digest = Tpkg.sha256(img)
 File.write("#{img}.sha256", "#{digest}  #{File.basename(img)}\n")
 Tpkg.log("image #{img} (#{(File.size(img) / 1e6).round(1)} MB) sha256=#{digest[0, 16]}…")
