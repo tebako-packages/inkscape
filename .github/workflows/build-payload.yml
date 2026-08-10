@@ -121,19 +121,19 @@ jobs:
       # releases are the interface; the feedstock never builds the tebako
       # stack from source and never shells to mkdwarfs. Digests from the
       # release's SHA256SUMS.
-      - name: Fetch the imager (tebako release v0.1.2, sha256-pinned)
+      - name: Fetch the imager (tebako release v0.1.3, sha256-pinned)
         shell: bash
         run: |
           set -euo pipefail
           case "${{ matrix.platform }}" in
-            x86_64-linux-gnu)    asset=tfs-0.1.2-linux-gnu-x86_64;   sha=07e47cf05fe19cbc726ad028e2ec8463502809c819c71d78449bc7a5650b95b4 ;;
-            aarch64-macos)       asset=tfs-0.1.2-macos-arm64;        sha=4b791be221501e03f2f64af155ebe6ef903f3a4a2c25733d93bfa2afb3165688 ;;
-            x86_64-windows-ucrt) asset=tfs-0.1.2-windows-ucrt64.exe; sha=66173b956ffd839d16954a3659177cbc2dc7bae6ba7b5330b1eb26bf83a4ea95 ;;
+            x86_64-linux-gnu)    asset=tfs-0.1.3-linux-gnu-x86_64;   sha=6317ad21de04d6e935e307acc14461cede851dec9f0faec091a786e13c419b73 ;;
+            aarch64-macos)       asset=tfs-0.1.3-macos-arm64;        sha=59367c53797e798cbb85a683f537e86bc0246f9cc3f741e2c8189b94a62c6e3b ;;
+            x86_64-windows-ucrt) asset=tfs-0.1.3-windows-ucrt64.exe; sha=56e9477d3f7d8b3c04423acda06c0d7f4e1cc5fb98ae0a34725efeb364042b54 ;;
             *) echo "no imager asset for ${{ matrix.platform }}" >&2; exit 1 ;;
           esac
           mkdir -p .packager
           curl -sSfL --retry 3 -o ".packager/${asset}" \
-            "https://github.com/tamatebako/tebako/releases/download/v0.1.2/${asset}"
+            "https://github.com/tamatebako/tebako/releases/download/v0.1.3/${asset}"
           echo "${sha}  .packager/${asset}" | { sha256sum -c - 2>/dev/null || shasum -a 256 -c -; }
           chmod +x ".packager/${asset}"
           if [ "${{ matrix.platform }}" = "x86_64-windows-ucrt" ]; then
