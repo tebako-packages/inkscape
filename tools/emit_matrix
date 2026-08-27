@@ -13,7 +13,8 @@ platforms = recipe["platforms"] or Tpkg.die("recipe missing platforms")
 
 legs = platforms.map do |platform|
   map = Tpkg::PLATFORM_MAP[platform] or Tpkg.die("unknown platform #{platform}")
-  { "version" => version, "platform" => platform, "runner" => map["runner"] }
+  { "version" => version, "platform" => platform, "runner" => map["runner"],
+    "asset_platform" => map["asset_platform"] }
 end
 
 puts JSON.generate({ "include" => legs })
