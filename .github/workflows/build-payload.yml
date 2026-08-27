@@ -180,7 +180,11 @@ jobs:
     name: publish
     if: startsWith(github.ref, 'refs/tags/')
     needs: build
-    runs-on: ubuntu-24.04
+    runs-on: macos-14
+    env:
+      TEBAKO_CLI: ${{ github.workspace }}/.packager/tebako
+      TEBAKO_HOME: ${{ github.workspace }}/.tebako
+      TEBAKO_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Collect payloads
@@ -190,6 +194,7 @@ jobs:
           path: out/
           merge-multiple: false
       - name: Restore layout
+        shell: bash
         run: |
           set -e
           for d in out/payload-*/; do
@@ -198,7 +203,70 @@ jobs:
             mv "$d"* "out/$p/"
             rmdir "$d"
           done
-      - name: Publish payloads + registry
-        run: tools/publish  # artifacts per triplet + SHA256SUMS + registry yaml pinned
+      # The publisher is the product repo's published CLI (same release
+      # line as the imager), pinned by recipe.yml's tools block — never a
+      # from-source build, no literals in this workflow. tebako publish
+      # also needs the dispatcher (it refuses to register shims pointing
+      # at nothing, exit 74) — fetch both, both pinned, both cross-checked
+      # against the release's SHA256SUMS.
+      - name: Read the toolchain pins (recipe.yml is the SSOT)
+        run: ruby tools/pins.rb macos-arm64 --env >> "$GITHUB_ENV"
+      - name: Fetch the publisher (pinned by recipe.yml, sha256-verified)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .packager
+          base="https://github.com/tamatebako/tebako/releases/download/$TEBAKO_RELEASE"
+          curl -sL --fail -o .packager/tebako "$base/$TEBAKO_ASSET"
+          curl -sL --fail -o .packager/tebako-shim "$base/$SHIM_ASSET"
+          curl -sL --fail -o SHA256SUMS "$base/SHA256SUMS"
+          echo "$TEBAKO_SHA256  .packager/tebako" | shasum -a 256 -c -
+          echo "$SHIM_SHA256  .packager/tebako-shim" | shasum -a 256 -c -
+          for pair in "$TEBAKO_ASSET:$TEBAKO_SHA256" "$SHIM_ASSET:$SHIM_SHA256"; do
+            asset="${pair%%:*}"; want="${pair##*:}"
+            got=$(awk -v a="$asset" '$2 == a {print $1}' SHA256SUMS)
+            [ "$got" = "$want" ] || { echo "::error::pin mismatch for $asset: recipe.yml=$want release=${got:-ABSENT}"; exit 1; }
+          done
+          chmod +x .packager/tebako .packager/tebako-shim
+          .packager/tebako --help > /dev/null
+      # The payload filenames come from tools/build's own naming
+      # (<name>-<upstream.version>-<triplet>.tfs — recipe values, NOT the
+      # git tag: a tag may carry a feedstock revision suffix like 1.4.3-2
+      # while the artifact keeps the upstream version).
+      - name: Publish (release + registry + clean-cache verify)
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$TEBAKO_CLI" publish --name "$PKG_NAME" \
+            --release "tfs:github:tebako-packages/inkscape:${{ github.ref_name }}" \
+            --payload "aarch64-macos=out/aarch64-macos/$PKG_NAME-$PKG_VERSION-aarch64-macos.tfs" \
+            --payload "x86_64-linux-gnu=out/x86_64-linux-gnu/$PKG_NAME-$PKG_VERSION-x86_64-linux-gnu.tfs" \
+            --payload "x86_64-windows-ucrt=out/x86_64-windows-ucrt/$PKG_NAME-$PKG_VERSION-x86_64-windows-ucrt.tfs" \
+            --registry-out "$GITHUB_WORKSPACE/tpkg-registry.yaml"
+      # main is branch-protected (and the GitHub-Actions bypass is not
+      # available on this plan): the registry lands by bot PR + auto-merge,
+      # never by direct push. Idempotent across re-runs of the same tag.
+      - name: Publish the registry entry via pull request
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "tebako-ci"
+          git config user.email "tebako@ribose.com"
+          git fetch origin main
+          if git diff --quiet origin/main -- tpkg-registry.yaml; then
+            echo "registry unchanged (or the entry already landed on main)"
+            exit 0
+          fi
+          branch="publish/${{ github.ref_name }}-registry"
+          git checkout -b "$branch"
+          git add tpkg-registry.yaml
+          git commit -m "publish ${{ github.ref_name }}: registry entry"
+          # force-with-lease on the bot branch: a re-publish re-creates it
+          git push --force-with-lease origin "$branch"
+          if ! gh pr view "$branch" >/dev/null 2>&1; then
+            gh pr create --base main --head "$branch" \
+              --title "publish ${{ github.ref_name }}: registry entry" \
+              --body "Automated registry entry for ${{ github.ref_name }} (the build-payload publish job; main is protected, so the registry lands by PR)."
+          fi
+          gh pr merge --auto --squash "$branch" || gh pr merge --squash "$branch"
