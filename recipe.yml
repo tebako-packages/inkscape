@@ -244,6 +244,29 @@ image:
       mkdwarfs-macos-arm64: "77c2d2c395a37a739ac73711ceb1011efdf2f8200aab1df4961ea0cff3fc959c"
       tebakofs-macos-arm64: "f29a5e19b5c01ef5639099a65f12176f9d1afa36e3df3c03691568d09cf89357"
 
+# Factory tools used by the workflow (the imager: tfs mkimage/extract):
+# the tebako/tfs CLIs from the tamatebako/tebako release. The asset digests
+# are pinned HERE — tools.sha256 is the repo's toolchain pin SSOT (the
+# workflow carries no version or digest literals; tools/pins.rb reads this
+# block into $GITHUB_ENV) and cross-checked against the release's own
+# SHA256SUMS at fetch time (the same trust-anchor role as upstream.sha256).
+tools:
+  repo: "tamatebako/tebako"
+  release: "v0.3.1"
+  sha256:
+    tebako:
+      macos-arm64: "ea95d642c8bfa03c23a7c4f868c42bb81cbbbbfb87fe28e0e28db0067a850b6e"
+      linux-gnu-x86_64: "034804fae6e25f654c64f08889f11ff55e0bdf46dd446d489fb25734b47aadc0"
+      windows-ucrt64: "6e86abeb16b3745bdb65e936567bbb255b73b84bcb43fccbf6e93f971cd09984"
+    tebako-shim:
+      macos-arm64: "eaf022a9e889afc23a70872bf8233904897dd94c9b62a65eb77fbd5c36c20710"
+      linux-gnu-x86_64: "3fa00b2e91199514407cb2100fd9c08c787923422cf2c223d74f1c6d97032e1d"
+      windows-ucrt64: "1c1a5dd9384b0952286eec1141d3164ae6e34baa2f0e040f787a7d5b0a8ef5a5"
+    tfs:
+      macos-arm64: "4136cf476a9e7470d401ee66546a841edf154e6a39f6083021b1f8786b6cc755"
+      linux-gnu-x86_64: "2dca2fe24401dc7110d7d3297984023e44eb466727ec3cf74459d3d14ea8d623"
+      windows-ucrt64: "4fde6e7252a0aef0767fb09c08971396b004f0d25f39f05c774ab8644bd1efe2"
+
 # phase A: x86_64-linux-gnu + aarch64-macos (macOS dogfood leg);
 # aarch64-linux-gnu and x86_64-macos legs follow.
 # x86_64-windows-ucrt: the mingw port of the dependency closure (ucrt64 gcc

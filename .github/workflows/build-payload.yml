@@ -119,27 +119,30 @@ jobs:
         run: tools/ci_run ruby tools/build recipe.yml "${{ matrix.version }}" "${{ matrix.platform }}"
       # The imager: the PUBLISHED tfs CLI (in-process dwarfs-t writer) —
       # releases are the interface; the feedstock never builds the tebako
-      # stack from source and never shells to mkdwarfs. Digests from the
-      # release's SHA256SUMS.
-      - name: Fetch the imager (tebako release v0.1.6, sha256-pinned)
+      # stack from source and never shells to mkdwarfs. Every version and
+      # digest flows from recipe.yml's tools block via tools/pins.rb (this
+      # workflow carries NO literals), cross-checked against the release's
+      # own SHA256SUMS at fetch time.
+      - name: Read the toolchain pins (recipe.yml is the SSOT)
+        shell: bash
+        run: ruby tools/pins.rb "${{ matrix.asset_platform }}" --env >> "$GITHUB_ENV"
+      - name: Fetch the imager (pinned by recipe.yml, sha256-verified)
         shell: bash
         run: |
           set -euo pipefail
-          case "${{ matrix.platform }}" in
-            x86_64-linux-gnu)    asset=tfs-0.1.6-linux-gnu-x86_64;   sha=024fd99fe17e0e3c098e6d95c27fcf6c413ed178a3b4a0218277d5420ccf6097 ;;
-            aarch64-macos)       asset=tfs-0.1.6-macos-arm64;        sha=5e9a4131347a231c889426f67d02344a65999bc9b9ec998ce6930d2917ec7336 ;;
-            x86_64-windows-ucrt) asset=tfs-0.1.6-windows-ucrt64.exe; sha=85e7b886e71b919ae6ecec2a36bcdb401691ac57197c581c21b61c9d4c0df395 ;;
-            *) echo "no imager asset for ${{ matrix.platform }}" >&2; exit 1 ;;
-          esac
           mkdir -p .packager
-          curl -sSfL --retry 3 -o ".packager/${asset}" \
-            "https://github.com/tamatebako/tebako/releases/download/v0.1.6/${asset}"
-          echo "${sha}  .packager/${asset}" | { sha256sum -c - 2>/dev/null || shasum -a 256 -c -; }
-          chmod +x ".packager/${asset}"
+          base="https://github.com/tamatebako/tebako/releases/download/$TEBAKO_RELEASE"
+          curl -sSfL --retry 3 -o ".packager/${TFS_ASSET}" "$base/${TFS_ASSET}"
+          curl -sSfL --retry 3 -o .packager/SHA256SUMS "$base/SHA256SUMS"
+          echo "${TFS_SHA256}  .packager/${TFS_ASSET}" | { sha256sum -c - 2>/dev/null || shasum -a 256 -c -; }
+          # The pin must agree with the release's own sums (both anchored).
+          got=$(awk -v a="$TFS_ASSET" '$2 == a {print $1}' .packager/SHA256SUMS)
+          [ "$got" = "$TFS_SHA256" ] || { echo "::error::pin mismatch for $TFS_ASSET: recipe.yml=$TFS_SHA256 release=${got:-ABSENT}"; exit 1; }
+          chmod +x ".packager/${TFS_ASSET}"
           if [ "${{ matrix.platform }}" = "x86_64-windows-ucrt" ]; then
-            cp ".packager/${asset}" .packager/tfs.exe
+            cp ".packager/${TFS_ASSET}" .packager/tfs.exe
           else
-            cp ".packager/${asset}" .packager/tfs
+            cp ".packager/${TFS_ASSET}" .packager/tfs
             echo "$GITHUB_WORKSPACE/.packager" >> "$GITHUB_PATH"
           fi
       - name: Stage artifact
