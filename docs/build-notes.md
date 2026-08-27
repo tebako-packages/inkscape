@@ -579,8 +579,14 @@ _PENDING the first green CI run on the feat/windows-leg PR — numbers
   stays outside the closure (payload floor: Windows 10/Server 2016+ UCRT
   API sets — every supported windows). Extract-mode smoke only (tfs-cli);
   there is no fuse driver for the dwarfs-t tools on windows.
-- `tools/publish` and the release job are wired but untagged/unexercised
-  until the first real tag.
+- The publish job is the product CLI's `tebako publish` (pinned by
+  recipe.yml's tools block via tools/pins.rb — no literals in the
+  workflow): it creates the release, uploads the per-triplet images,
+  regenerates tpkg-registry.yaml, and verifies clean-cache resolution;
+  the registry then lands on main by bot PR (main is protected). The
+  old `tools/publish` (static-registry asset shipper) is retired —
+  1.4.3-2 shipped a stale registry asset because nothing regenerated
+  it per tag.
 
 ## Follow-ups
 
