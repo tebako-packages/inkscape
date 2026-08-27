@@ -10,8 +10,14 @@
 #
 # <tool-platform> is the tebako release asset platform (macos-arm64,
 # linux-gnu-x86_64, windows-ucrt64). --release-only emits just
-# TEBAKO_RELEASE/TEBAKO_VERSION/PKG_NAME/PKG_VERSION. Unknown platform /
-# missing pin is a named error, never a guess (spec 00 §9).
+# TEBAKO_RELEASE/PKG_NAME/PKG_VERSION. Unknown platform / missing
+# pin is a named error, never a guess (spec 00 §9).
+#
+# NEVER emit a bare TEBAKO_VERSION: in the sibling feedstocks tools/build
+# uses that name for the RUNTIME release line with an env override, so a
+# tools-version export silently clobbers the runtime pin (the 2026-08-27
+# metanorma collision: the press resolved runtime release v0.3.1, exit
+# 124). The tools version lives inside the computed ASSET names.
 
 require "yaml"
 
@@ -29,7 +35,6 @@ die "recipe.yml tools.sha256 missing" unless tools["sha256"].is_a?(Hash)
 
 pairs = {
   "TEBAKO_RELEASE" => release,
-  "TEBAKO_VERSION" => version,
   "PKG_NAME" => recipe.fetch("name"),
   "PKG_VERSION" => recipe.dig("upstream", "version") ||
                    die("recipe.yml upstream.version missing"),
