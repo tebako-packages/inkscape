@@ -38,6 +38,11 @@ pairs = {
   "PKG_NAME" => recipe.fetch("name"),
   "PKG_VERSION" => recipe.dig("upstream", "version") ||
                    die("recipe.yml upstream.version missing"),
+  # Signing (spec 09 §9 — opt-in via the recipe's signing: block; the
+  # hello pattern): the tamatebako root's PRIMARY keyid (low 64). The
+  # publish step passes it to `tebako publish --sign=`; empty when the
+  # recipe declares no signing (unsigned stays first-class, loudly).
+  "SIGNING_KEYID" => recipe.dig("signing", "keyid").to_s,
 }
 
 unless ARGV.include?("--release-only")

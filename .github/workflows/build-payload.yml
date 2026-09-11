@@ -234,10 +234,45 @@ jobs:
       # git tag: a tag may carry a feedstock revision suffix like 1.4.3-2
       # while the artifact keeps the upstream version).
       - name: Publish (release + registry + clean-cache verify)
+        # Signing (recipe.yml's signing: block; spec 09 §9): SIGNING_KEYID
+        # flows from the pins step's GITHUB_ENV export; the CI signing
+        # subkey arrives as org secret TEBAKO_CI_SIGNING_KEY and is staged
+        # into the publisher home's keys/ below. Declared-signing + absent
+        # secret fails the publish (fail-closed before any upload).
+        env:
+          TEBAKO_SIGNING_KEY: ${{ secrets.TEBAKO_CI_SIGNING_KEY }}
         shell: bash
         run: |
           set -euo pipefail
-          "$TEBAKO_CLI" publish --name "$PKG_NAME" \
+          # The signing key staging: with a recipe-declared signing block
+          # the secret MUST be present — a signing feedstock never
+          # publishes unsigned. The key file lands in the publisher home's
+          # keys/ (tebako-cli resolves secret keys by keyid from
+          # $TEBAKO_HOME/keys/*.key). Unsigned (no signing block) stays
+          # first-class, loudly.
+          SIGN_ARGS=()
+          if [ -n "${SIGNING_KEYID:-}" ]; then
+            : "${TEBAKO_SIGNING_KEY:?publish: recipe declares signing but TEBAKO_SIGNING_KEY is empty — a signing feedstock never publishes unsigned}"
+            mkdir -p "$TEBAKO_HOME/keys"
+            printf '%s\n' "$TEBAKO_SIGNING_KEY" > "$TEBAKO_HOME/keys/ci-signing.key"
+            chmod 600 "$TEBAKO_HOME/keys/ci-signing.key"
+            SIGN_ARGS=(--sign="$SIGNING_KEYID")
+          else
+            echo "::notice::recipe declares no signing — publishing unsigned (unsigned is first-class; the registry carries no signature pins)"
+          fi
+          # SIGN_ARGS carries --sign=<keyid> when the recipe signs; the
+          # ${arr[@]+...} guard keeps the empty (unsigned) expansion
+          # legal under set -u on bash 3.2 (macOS's /bin/bash).
+          # --version is REQUIRED at v2.6.0: the filename derivation
+          # expects the release-asset infix (…-macos-arm64.tfs) while this
+          # feedstock's stage names payloads with the vcpkg triplet
+          # (…-aarch64-macos.tfs) — pin the version, never let the CLI
+          # guess. Consequence of the v0.3.1→v2.6.0 bump: the UPLOADED
+          # asset names move to the release-asset infix; the registry
+          # entry absorbs the rename (it pins artifact names), and
+          # already-published releases keep their assets untouched.
+          "$TEBAKO_CLI" publish "${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"}" --name "$PKG_NAME" \
+            --version "$PKG_VERSION" \
             --release "tfs:github:tebako-packages/inkscape:${{ github.ref_name }}" \
             --payload "aarch64-macos=out/aarch64-macos/$PKG_NAME-$PKG_VERSION-aarch64-macos.tfs" \
             --payload "x86_64-linux-gnu=out/x86_64-linux-gnu/$PKG_NAME-$PKG_VERSION-x86_64-linux-gnu.tfs" \
