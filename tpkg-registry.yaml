@@ -6,16 +6,19 @@ payloads:
   - version: '1.4.3'
     platforms:
       aarch64-macos:
-        artifact: inkscape-1.4.3-aarch64-macos.tfs
-        sha256: '68a6b3717c1a01249e0d2ff2e9f9c41f8c4441faaeeb65657e18b7c2e7ea2a7a'
+        artifact: inkscape-1.4.3-macos-arm64.tfs
+        sha256: '9cc56f85ff9c865a6eb0532d744cb8fe271895bab3bbe3c6a9aef1cc2c72a830'
       x86_64-linux-gnu:
-        artifact: inkscape-1.4.3-x86_64-linux-gnu.tfs
-        sha256: '56aa809b13c0b5875e98fcfea0facbb172d8aa51a5860e1ccdafeebd3183ce45'
+        artifact: inkscape-1.4.3-linux-gnu-x86_64.tfs
+        sha256: c1163508e1b7c00eb5916cbbb50cb0334a96d8c1aa93579f1f0700d3b0cd64a0
       x86_64-windows-ucrt:
-        artifact: inkscape-1.4.3-x86_64-windows-ucrt.tfs
-        sha256: '1df2edb60ecaaef46c0f077b9421b597ef975ba31b076ef8a2ae3d0a971f4292'
+        artifact: inkscape-1.4.3-windows-ucrt64.tfs
+        sha256: '014c8fb76fd123cb1b5fc50c3a99c236c2e0f0454bbadb32ea9346eb68a3422d'
     release:
-      ref: tfs:github:tebako-packages/inkscape:1.4.3-2
+      ref: tfs:github:tebako-packages/inkscape:1.4.3-3
+    signature:
+      keyid: efc3c250f7862a48
+      asc: inkscape-1.4.3-macos-arm64.tfs.asc
     entrypoints:
     - inkscape
   default: '1.4.3'
