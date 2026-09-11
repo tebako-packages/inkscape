@@ -17,6 +17,10 @@ concurrency:
 
 permissions:
   contents: write
+  # The publish job's registry step lands the entry by bot PR (main is
+  # branch-protected) — createPullRequest needs this grant (the 1.4.3-3
+  # tag run proved its absence fatal: publish green, registry PR 403).
+  pull-requests: write
 
 jobs:
   matrix:
