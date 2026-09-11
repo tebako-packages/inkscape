@@ -297,12 +297,48 @@ module Tpkg
     rpaths
   end
 
+  # Resolve an @rpath/<leaf> ref issued by file f back into the supplier
+  # tree. Brew bottles link intra-/cross-package deps as @rpath (e.g.
+  # libwebp.7.dylib → @rpath/libsharpyuv.0.dylib, LC_RPATH @loader_path),
+  # so the walk must chase them or it dies on a perfectly good supplier
+  # lib. Candidate dirs, in order: the supplier dir f itself was copied
+  # from (its @loader_path home — the copy's rpaths were authored for the
+  # original keg location, not the payload dir), then f's LC_RPATH entries
+  # (@loader_path expanded against that home; absolute entries kept only
+  # inside the supplier prefix). A found leaf still has to realpath into
+  # the supplier tree — a hit anywhere else is a bug, not a find (single
+  # supplier). Returns the realpath, or nil when the leaf resolves nowhere.
+  def rpath_supplier_resolve(f, leaf, copied)
+    home = File.dirname(copied[File.basename(f)]) if copied.key?(File.basename(f))
+    dirs = [home].compact
+    otool_rpaths(f).each do |entry|
+      dir = if entry.start_with?("@loader_path")
+              home && File.expand_path(entry.sub("@loader_path", home))
+            elsif entry.match?(MACOS_SUPPLIER_REF)
+              entry
+            end
+      dirs << dir if dir
+    end
+    dirs.uniq.each do |dir|
+      candidate = File.join(dir, leaf)
+      next unless File.exist?(candidate)
+      real = File.realpath(candidate)
+      return real if real.match?(MACOS_SUPPLIER_REF)
+    end
+    nil
+  end
+
   # Fixpoint otool walk of the payload tree, closing over every non-system
   # dylib reference into lib/. Rules (documented in docs/build-notes.md):
   #  * /usr/lib + /System/Library refs stay out (the libSystem family).
   #  * Everything else must come from the single supplier (brew tree) and is
   #    copied FLAT into lib/ as <leaf>; a leaf colliding with different
   #    content is an error, not a choice (single supplier ⇒ none expected).
+  #    @rpath refs to leaves the payload does not have resolve back into the
+  #    supplier tree through the referrer's rpath wiring
+  #    (rpath_supplier_resolve) and are copied the same way — brew bottles
+  #    link intra-package deps as @rpath (libwebp → libsharpyuv); an @rpath
+  #    leaf that resolves nowhere stays a hard error, never a silent skip.
   #  * After copying, every payload Mach-O gets its supplier-absolute refs
   #    rewritten to @rpath/<leaf> and every closure dylib gets
   #    -id @rpath/<leaf> (install_name_tool — the macOS bundling step; the
@@ -363,7 +399,14 @@ module Tpkg
         when /\A@rpath\/(.+)/
           leaf = Regexp.last_match(1)
           next if payload_leaf.call(leaf) || copied.key?(leaf)
-          die("unresolvable @rpath ref #{ref} in #{f} (not in payload, not a supplier lib)")
+          real = rpath_supplier_resolve(f, leaf, copied)
+          die("unresolvable @rpath ref #{ref} in #{f} (not in payload, not a supplier lib)") unless real
+          dest = File.join(libd, leaf)
+          FileUtils.cp(real, dest)
+          FileUtils.chmod(0o755, dest) # brew bottles are read-only (0444);
+                                       # strip/install_name_tool/codesign need +w
+          copied[leaf] = real
+          queue << dest if macho?(dest)
         when /\A(@loader_path|@executable_path)\//
           next # intra-payload reference, resolved relative to its loader
         else

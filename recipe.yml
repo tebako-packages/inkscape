@@ -252,20 +252,46 @@ image:
 # SHA256SUMS at fetch time (the same trust-anchor role as upstream.sha256).
 tools:
   repo: "tamatebako/tebako"
-  release: "v0.3.1"
+  release: "v2.6.0"          # v2.6.0 carries the spec 09 §9 zero-interaction
+                             # trust plane (tebako#564): the embedded root
+                             # public key + primary-keyid registry signature
+                             # pins — REQUIRED for the publish-signing leg
+                             # (the signing: block below): the publish's own
+                             # clean-cache verify resolves the registry's
+                             # signature pins against the embedded root, and
+                             # an older CLI would fail closed on its own
+                             # signed publish. The bump is publish-side only
+                             # in effect: tfs-cli's grammar (mkimage/cat/
+                             # stat/extract — the imager + smoke legs) is
+                             # byte-identical v0.3.1→v2.6.0 (the
+                             # crates/tfs-cli/src diff is empty).
   sha256:
     tebako:
-      macos-arm64: "ea95d642c8bfa03c23a7c4f868c42bb81cbbbbfb87fe28e0e28db0067a850b6e"
-      linux-gnu-x86_64: "034804fae6e25f654c64f08889f11ff55e0bdf46dd446d489fb25734b47aadc0"
-      windows-ucrt64: "6e86abeb16b3745bdb65e936567bbb255b73b84bcb43fccbf6e93f971cd09984"
+      macos-arm64: "0f976f98e0da856e38585621bdaeec81c21607a77a6939c2a22e4b29d5b28274"
+      linux-gnu-x86_64: "2ba65a2e31a4f974b05c1ff9ef459f4dd4dee68ea4cc5835349332b1795a3a5d"
+      windows-ucrt64: "0fde7fcd94d4ea4536e55840214ed10111b0cc98014b908b4b91e2c81952a458"
     tebako-shim:
-      macos-arm64: "eaf022a9e889afc23a70872bf8233904897dd94c9b62a65eb77fbd5c36c20710"
-      linux-gnu-x86_64: "3fa00b2e91199514407cb2100fd9c08c787923422cf2c223d74f1c6d97032e1d"
-      windows-ucrt64: "1c1a5dd9384b0952286eec1141d3164ae6e34baa2f0e040f787a7d5b0a8ef5a5"
+      macos-arm64: "6abb03da023770faad0759ca47c2914189a7ac41bb3be64c0392b7773698941f"
+      linux-gnu-x86_64: "61ab3ae2d7418deefa012ab9e90b5100b69b8566f4aabd416bc0c6accf1c54ea"
+      windows-ucrt64: "72db8c1ed235b60a3aa6c189d4e2846e95ec5bf4099cf4a8d5c25d7022fd2594"
     tfs:
-      macos-arm64: "4136cf476a9e7470d401ee66546a841edf154e6a39f6083021b1f8786b6cc755"
-      linux-gnu-x86_64: "2dca2fe24401dc7110d7d3297984023e44eb466727ec3cf74459d3d14ea8d623"
-      windows-ucrt64: "4fde6e7252a0aef0767fb09c08971396b004f0d25f39f05c774ab8644bd1efe2"
+      macos-arm64: "e30a1447353974f23322beb3bb0d8c0ff2cab4cf4b8412b7b6c350c76c609268"
+      linux-gnu-x86_64: "03f62f544d172ea301c163a332d8130f834f4c98c46fc64ba8e43efca230e7ea"
+      windows-ucrt64: "e36c7f4e16171cbeaf48d6d02e8e3919d6ef2bb3501109027f0add5c0119abb3"
+
+# Signing (spec 09 §9 — opt-in per feedstock): on tag pushes the publish
+# step signs every payload image (plus SHA256SUMS and the registry itself)
+# with the CI signing subkey of the tamatebako root, supplied as the org
+# secret TEBAKO_CI_SIGNING_KEY, and the registry pins the PRIMARY keyid
+# (the identity, not the rotating subkey instrument). A declared signing
+# block with an absent secret FAILS the publish — a signing feedstock
+# never ships an unsigned release silently. No signing.tool sub-block
+# (hello needed a separate signer binary): the publisher IS the tools
+# block's pinned tebako CLI — v2.6.0, the first release whose embedded
+# root public key verifies the registry's signature pins at the publish's
+# own clean-cache verify.
+signing:
+  keyid: "efc3c250f7862a48" # 2026-09-09 tamatebako root primary (low 64)
 
 # phase A: x86_64-linux-gnu + aarch64-macos (macOS dogfood leg);
 # aarch64-linux-gnu and x86_64-macos legs follow.

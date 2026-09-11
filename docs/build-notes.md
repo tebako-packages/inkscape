@@ -286,7 +286,13 @@ prefix → `share/inkscape` auto-found, same as linux.
    (they ARE the platform stack) — are copied FLAT into `lib/<leaf>`.
    Fixpoint: each copy is walked, pulling deps-of-deps. gdk-pixbuf loaders
    (dlopen'd) and the stock fontconfig config are copied from the brew tree
-   first so the walk closes over them too.
+   first so the walk closes over them too. Brew bottles also link
+   intra-/cross-package deps as `@rpath/<leaf>` (e.g. `libwebp.7.dylib` →
+   `@rpath/libsharpyuv.0.dylib` behind an `@loader_path` LC_RPATH): an
+   `@rpath` leaf the payload does not have is resolved back into the
+   supplier tree through the referrer's own rpath wiring (the copied-from
+   keg dir first, then its LC_RPATH entries) and copied the same way; a
+   leaf that resolves nowhere aborts the build — never a silent skip.
 4. **Collision rule**: a `<leaf>` colliding with different content is a hard
    ERROR, never a pick — single supplier makes collisions impossible in
    principle, so one appearing means the provenance assumption broke.
