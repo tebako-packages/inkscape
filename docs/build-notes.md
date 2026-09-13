@@ -555,8 +555,9 @@ shipping dwarfs-t reader; staged next to the image as
 
 ### Proof (windows-latest runner, ucrt64 gcc 16.1)
 
-_PENDING the first green CI run on the feat/windows-leg PR — numbers
-(closure DLL count, image size, sweep stats) land here with the merge._
+The windows leg ships in the 1.4.3 line:
+`inkscape-1.4.3-windows-ucrt64.tfs` (36 954 279 bytes on release 1.4.3-3,
+OpenPGP-signed like every asset); CI carries the per-build closure stats.
 
 ## Known limitations (phase A, honest list)
 
@@ -580,8 +581,8 @@ _PENDING the first green CI run on the feat/windows-leg PR — numbers
   the extraction tree and sees the host filesystem only: no VFS view of
   metanorma's mounts, no jails (a platform-API statement, spec 07 §8 tier
   2b). A caller handing inkscape paths INSIDE a mounted image must
-  materialize them to host paths first (the windows dogfood e2e,
-  TODO.prepublish/06, owns that flow). The Win32/NT system DLL surface
+  materialize them to host paths first (the windows dogfood e2e owns
+  that flow). The Win32/NT system DLL surface
   stays outside the closure (payload floor: Windows 10/Server 2016+ UCRT
   API sets — every supported windows). Extract-mode smoke only (tfs-cli);
   there is no fuse driver for the dwarfs-t tools on windows.
