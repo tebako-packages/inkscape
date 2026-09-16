@@ -32,10 +32,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: m
         run: |
-          # The matrix is EMITTED from recipe.yml (YAML stays thin;
+          # The matrix is EMITTED from Tebakofile (YAML stays thin;
           # logic lives in tools/). tools/emit_matrix emits one leg per
           # (version × platform) in the recipe.
-          echo "legs=$(ruby tools/emit_matrix recipe.yml)" >> "$GITHUB_OUTPUT"
+          echo "legs=$(ruby tools/emit_matrix Tebakofile)" >> "$GITHUB_OUTPUT"
 
   build:
     name: ${{ matrix.platform }}
@@ -53,13 +53,13 @@ jobs:
           # The recipe's port set builds from source on every cold run
           # (40-60+ min per leg). The workspace path is stable across
           # runs, so the installed tree's embedded absolute paths stay
-          # valid. recipe.yml pins the vcpkg commit — the hash covers it.
+          # valid. Tebakofile pins the vcpkg commit — the hash covers it.
           path: |
             .cache/vcpkg/installed
             .cache/vcpkg/downloads
             ~/.cache/vcpkg
             ~/Library/Caches/vcpkg
-          key: feedstock-vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('recipe.yml', 'tools/triplets/**') }}
+          key: feedstock-vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Tebakofile', 'tools/triplets/**') }}
           restore-keys: |
             feedstock-vcpkg-${{ runner.os }}-${{ runner.arch }}-
       - name: Cache the vcpkg installed tree (windows leg)
@@ -74,7 +74,7 @@ jobs:
             D:\tpkg-cache\vcpkg\installed
             D:\tpkg-cache\vcpkg\downloads
             ~/AppData/Local/vcpkg
-          key: feedstock-vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('recipe.yml', 'tools/triplets/**') }}
+          key: feedstock-vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Tebakofile', 'tools/triplets/**') }}
           restore-keys: |
             feedstock-vcpkg-${{ runner.os }}-${{ runner.arch }}-
       - name: Toolchain ruby (macOS)
@@ -108,10 +108,10 @@ jobs:
         # msys2 environment (the build steps' closed PATH keeps the msys
         # /usr/bin out — the vcpkg-autotools ABI clash rule). The package
         # list is recipe data (build.pacman_packages).
-        run: tools/pacman_install recipe.yml
+        run: tools/pacman_install Tebakofile
       - name: Build ${{ matrix.version }} (${{ matrix.platform }})
         if: matrix.platform != 'x86_64-windows-ucrt'
-        run: tools/build recipe.yml "${{ matrix.version }}" "${{ matrix.platform }}"
+        run: tools/build Tebakofile "${{ matrix.version }}" "${{ matrix.platform }}"
       - name: Build ${{ matrix.version }} (${{ matrix.platform }}, ucrt64)
         if: matrix.platform == 'x86_64-windows-ucrt'
         shell: bash
@@ -120,17 +120,17 @@ jobs:
           TPKG_CACHE: D:\tpkg-cache
         # the closed ucrt64 environment (one toolchain, closed PATH, the
         # make toolshim, cargo/botan/bindgen steering) is tools/ci_run.
-        run: tools/ci_run ruby tools/build recipe.yml "${{ matrix.version }}" "${{ matrix.platform }}"
+        run: tools/ci_run ruby tools/build Tebakofile "${{ matrix.version }}" "${{ matrix.platform }}"
       # The imager: the PUBLISHED tfs CLI (in-process dwarfs-t writer) —
       # releases are the interface; the feedstock never builds the tebako
       # stack from source and never shells to mkdwarfs. Every version and
-      # digest flows from recipe.yml's tools block via tools/pins.rb (this
+      # digest flows from Tebakofile's tools block via tools/pins.rb (this
       # workflow carries NO literals), cross-checked against the release's
       # own SHA256SUMS at fetch time.
-      - name: Read the toolchain pins (recipe.yml is the SSOT)
+      - name: Read the toolchain pins (Tebakofile is the SSOT)
         shell: bash
         run: ruby tools/pins.rb "${{ matrix.asset_platform }}" --env >> "$GITHUB_ENV"
-      - name: Fetch the imager (pinned by recipe.yml, sha256-verified)
+      - name: Fetch the imager (pinned by Tebakofile, sha256-verified)
         shell: bash
         run: |
           set -euo pipefail
@@ -141,7 +141,7 @@ jobs:
           echo "${TFS_SHA256}  .packager/${TFS_ASSET}" | { sha256sum -c - 2>/dev/null || shasum -a 256 -c -; }
           # The pin must agree with the release's own sums (both anchored).
           got=$(awk -v a="$TFS_ASSET" '$2 == a {print $1}' .packager/SHA256SUMS)
-          [ "$got" = "$TFS_SHA256" ] || { echo "::error::pin mismatch for $TFS_ASSET: recipe.yml=$TFS_SHA256 release=${got:-ABSENT}"; exit 1; }
+          [ "$got" = "$TFS_SHA256" ] || { echo "::error::pin mismatch for $TFS_ASSET: Tebakofile=$TFS_SHA256 release=${got:-ABSENT}"; exit 1; }
           chmod +x ".packager/${TFS_ASSET}"
           if [ "${{ matrix.platform }}" = "x86_64-windows-ucrt" ]; then
             cp ".packager/${TFS_ASSET}" .packager/tfs.exe
@@ -208,14 +208,14 @@ jobs:
             rmdir "$d"
           done
       # The publisher is the product repo's published CLI (same release
-      # line as the imager), pinned by recipe.yml's tools block — never a
+      # line as the imager), pinned by Tebakofile's tools block — never a
       # from-source build, no literals in this workflow. tebako publish
       # also needs the dispatcher (it refuses to register shims pointing
       # at nothing, exit 74) — fetch both, both pinned, both cross-checked
       # against the release's SHA256SUMS.
-      - name: Read the toolchain pins (recipe.yml is the SSOT)
+      - name: Read the toolchain pins (Tebakofile is the SSOT)
         run: ruby tools/pins.rb macos-arm64 --env >> "$GITHUB_ENV"
-      - name: Fetch the publisher (pinned by recipe.yml, sha256-verified)
+      - name: Fetch the publisher (pinned by Tebakofile, sha256-verified)
         shell: bash
         run: |
           set -euo pipefail
@@ -229,7 +229,7 @@ jobs:
           for pair in "$TEBAKO_ASSET:$TEBAKO_SHA256" "$SHIM_ASSET:$SHIM_SHA256"; do
             asset="${pair%%:*}"; want="${pair##*:}"
             got=$(awk -v a="$asset" '$2 == a {print $1}' SHA256SUMS)
-            [ "$got" = "$want" ] || { echo "::error::pin mismatch for $asset: recipe.yml=$want release=${got:-ABSENT}"; exit 1; }
+            [ "$got" = "$want" ] || { echo "::error::pin mismatch for $asset: Tebakofile=$want release=${got:-ABSENT}"; exit 1; }
           done
           chmod +x .packager/tebako .packager/tebako-shim
           .packager/tebako --help > /dev/null
@@ -238,7 +238,7 @@ jobs:
       # git tag: a tag may carry a feedstock revision suffix like 1.4.3-2
       # while the artifact keeps the upstream version).
       - name: Publish (release + registry + clean-cache verify)
-        # Signing (recipe.yml's signing: block; spec 09 §9): SIGNING_KEYID
+        # Signing (Tebakofile's signing: block; spec 09 §9): SIGNING_KEYID
         # flows from the pins step's GITHUB_ENV export; the CI signing
         # subkey arrives as org secret TEBAKO_CI_SIGNING_KEY and is staged
         # into the publisher home's keys/ below. Declared-signing + absent

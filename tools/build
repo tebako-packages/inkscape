@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Usage: tools/build recipe.yml <version> <platform>
+# Usage: tools/build Tebakofile <version> <platform>
 #
 # fetch (sha256-verified) + vcpkg deps + cmake + install + closure pass.
 # Produces out/<platform>/root — the relocatable payload tree:
@@ -17,7 +17,7 @@
 autoload :Tpkg, File.expand_path("lib/tpkg", __dir__)
 
 recipe_path, version, platform = ARGV
-Tpkg.die("usage: tools/build recipe.yml <version> <platform>") unless recipe_path && version && platform
+Tpkg.die("usage: tools/build Tebakofile <version> <platform>") unless recipe_path && version && platform
 
 recipe = Tpkg.recipe(recipe_path)
 # vcpkg's compiler-hash tracking spawns a detect_compiler try_compile that

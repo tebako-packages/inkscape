@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/pacman_install recipe.yml — install the windows leg's GNOME platform
+# tools/pacman_install Tebakofile — install the windows leg's GNOME platform
 # stack (the recipe's build.pacman_packages) with msys2 pacman. Runs under
 # the setup-msys2 shell (shell: msys2 {0}): pacman is provisioning, not
 # build logic — it gets its native environment here (install scriptlets
@@ -8,7 +8,7 @@
 # scraping in bash.
 set -euo pipefail
 
-RECIPE="${1:?usage: tools/pacman_install recipe.yml}"
+RECIPE="${1:?usage: tools/pacman_install Tebakofile}"
 # tr -d '\r': the ucrt64 ruby is a NATIVE windows binary — its puts emits
 # \r\n on the pipe, mapfile -t strips only the \n, and a package name with
 # a trailing \r is pacman's "target not found" with the CR invisible in

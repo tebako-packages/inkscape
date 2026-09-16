@@ -24,7 +24,7 @@ module Tpkg
     # the vcpkg deps ship as DLLs and join the PE/DLL closure like every
     # other leg's supplier libs. (x64-mingw-static would fold them into the
     # exe instead — legitimate for a wrapped tier, but no link-time
-    # interposition archive ships for payload exes; see recipe.yml's
+    # interposition archive ships for payload exes; see Tebakofile's
     # exec-tier note.)
     "x86_64-windows-ucrt" => { "runner" => "windows-latest",  "vcpkg_triplet" => "x64-mingw-dynamic",  "asset_platform" => "windows-ucrt64" }
   }.freeze

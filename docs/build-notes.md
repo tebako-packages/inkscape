@@ -52,7 +52,7 @@ the closure resolves them vcpkg-first (the superset we actually linked).
 vcpkg `gtk3` itself *is* linux-capable (`!android`, 3.24.52) — noted for the
 phase-B overlay-ports follow-up.
 
-## Feature set (cmake options, recipe.yml `build.cmake.options`)
+## Feature set (cmake options, Tebakofile `build.cmake.options`)
 
 Kept: SVG→PDF and SVG→PNG export (cairo-native, no poppler), internal
 2geom, OpenMP, X11 linkage left at upstream default ON (harmless; the X
@@ -139,7 +139,7 @@ recipe leg was proven, not an arm64 stand-in).
 - Payload image: **packed locally (45.9 MB) and on CI (33.2 MB)**.
 - ONLY open item: mount-mode boot-smoke on GHA runners (details below).
 
-**Payload build: PROVEN.** `tools/build recipe.yml 1.4.3 x86_64-linux-gnu`
+**Payload build: PROVEN.** `tools/build Tebakofile 1.4.3 x86_64-linux-gnu`
 completed end-to-end: sha256-verified tarball fetch, 29 vcpkg ports
 (x64-linux-dynamic overlay triplet), cmake configure+build+install
 (901 ninja targets), closure pass (98 libs), strip, pre-image smoke:
@@ -329,7 +329,7 @@ kernel-extension dance attempted).
 
 ### Proof (aarch64-macos leg, native macOS 14.1 arm64 host)
 
-**Build: PROVEN end-to-end.** `tools/build recipe.yml 1.4.3 aarch64-macos`:
+**Build: PROVEN end-to-end.** `tools/build Tebakofile 1.4.3 aarch64-macos`:
 brew platform stack (gtkmm3 family, bottles, brew-verified), sha256-verified
 tarball (cache hit), 29 vcpkg ports @ `cd61e1e2` (`arm64-osx-static`,
 8.1 min cold), cmake configure + 1021 ninja targets + install, closure pass:
@@ -587,7 +587,7 @@ OpenPGP-signed like every asset); CI carries the per-build closure stats.
   API sets — every supported windows). Extract-mode smoke only (tfs-cli);
   there is no fuse driver for the dwarfs-t tools on windows.
 - The publish job is the product CLI's `tebako publish` (pinned by
-  recipe.yml's tools block via tools/pins.rb — no literals in the
+  Tebakofile's tools block via tools/pins.rb — no literals in the
   workflow): it creates the release, uploads the per-triplet images,
   regenerates tpkg-registry.yaml, and verifies clean-cache resolution;
   the registry then lands on main by bot PR (main is protected). The

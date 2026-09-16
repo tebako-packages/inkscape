@@ -21,7 +21,7 @@ autoload :Tpkg, File.expand_path("lib/tpkg", __dir__)
 out_dir, platform = ARGV
 Tpkg.die("usage: tools/stage out/<platform> <platform>") unless out_dir && platform
 
-recipe = Tpkg.recipe(File.join(Tpkg::ROOT, "recipe.yml"))
+recipe = Tpkg.recipe(File.join(Tpkg::ROOT, "Tebakofile"))
 version = recipe.dig("upstream", "version")
 root = File.join(out_dir, "root")
 Tpkg.die("payload tree #{root} missing — run tools/build first") unless File.directory?(root)

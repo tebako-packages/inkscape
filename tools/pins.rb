@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# pins.rb — read recipe.yml's `tools:` block (the repo's toolchain pin
+# pins.rb — read Tebakofile's `tools:` block (the repo's toolchain pin
 # SSOT) and emit KEY=VALUE lines for $GITHUB_ENV. The workflow carries NO
 # version or digest literals — every value flows from the recipe.
 #
@@ -27,17 +27,17 @@ def die(msg)
 end
 
 root = File.expand_path("..", __dir__)
-recipe = YAML.load_file(File.join(root, "recipe.yml"))
+recipe = YAML.load_file(File.join(root, "Tebakofile"))
 tools = recipe.fetch("tools")
 release = tools.fetch("release")
 version = release.sub(/\Av/, "")
-die "recipe.yml tools.sha256 missing" unless tools["sha256"].is_a?(Hash)
+die "Tebakofile tools.sha256 missing" unless tools["sha256"].is_a?(Hash)
 
 pairs = {
   "TEBAKO_RELEASE" => release,
   "PKG_NAME" => recipe.fetch("name"),
   "PKG_VERSION" => recipe.dig("upstream", "version") ||
-                   die("recipe.yml upstream.version missing"),
+                   die("Tebakofile upstream.version missing"),
   # Signing (spec 09 §9 — opt-in via the recipe's signing: block; the
   # hello pattern): the tamatebako root's PRIMARY keyid (low 64). The
   # publish step passes it to `tebako publish --sign=`; empty when the
@@ -50,7 +50,7 @@ unless ARGV.include?("--release-only")
   exe = platform.start_with?("windows") ? ".exe" : ""
   { "tebako" => "TEBAKO", "tebako-shim" => "SHIM", "tfs" => "TFS" }.each do |tool, key|
     sha = tools.dig("sha256", tool, platform) or
-      die "recipe.yml: no tools.sha256.#{tool}.#{platform} pin"
+      die "Tebakofile: no tools.sha256.#{tool}.#{platform} pin"
     pairs["#{key}_ASSET"] = "#{tool}-#{version}-#{platform}#{exe}"
     pairs["#{key}_SHA256"] = sha
   end
