@@ -18,7 +18,7 @@ img = Dir[File.join(out_dir, "*.{dwarfs,tfs}")].first or Tpkg.die("no .dwarfs/.t
 platform = File.basename(img).sub(/\Ainkscape-[\d.]+-/, "").sub(/\.(dwarfs|tfs)\z/, "")
 macos = platform.end_with?("-macos")
 windows = platform.end_with?("-windows-ucrt")
-recipe = Tpkg.recipe(File.join(Tpkg::ROOT, "recipe.yml"))
+recipe = Tpkg.recipe(File.join(Tpkg::ROOT, "Tebakofile"))
 tools = Tpkg.ensure_dwarfs_tools(recipe, platform: platform)
 # prefer the image tools staged next to the image (same run's build/download)
 %w[mkdwarfs dwarfs dwarfsextract tebakofs].each do |t|
