@@ -287,7 +287,9 @@ jobs:
       # never by direct push. Idempotent across re-runs of the same tag.
       - name: Publish the registry entry via pull request
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The CI PAT authors the PR: a GITHUB_TOKEN-authored PR's checks
+          # sit on the approval queue until they expire red.
+          GH_TOKEN: ${{ secrets.TEBAKO_CI_PAT_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           git config user.name "tebako-ci"
