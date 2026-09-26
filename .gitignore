@@ -1,7 +1,5 @@
 out/
 .cache/
-*.dwarfs
-*.dwarfs.sha256
 *.tfs
 *.tfs.sha256
 .DS_Store

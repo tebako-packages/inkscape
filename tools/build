@@ -284,13 +284,12 @@ else
 end
 
 if macos || windows
-  # Resolve every payload symlink to a plain file copy. macOS: libtfs
-  # v0.13.0's dwarfs backend (filesystem_v2_lite) cannot READ symlink inodes
-  # (fontconfig's etc/fonts/conf.d/*.conf are symlinks too; upstream
-  # follow-up: symlink support there). windows: pacman trees can carry msys
-  # symlinks, and extraction on a windows host cannot count on symlink
-  # creation privileges. mkdwarfs dedups identical content either way, so
-  # the image size is unaffected.
+  # Resolve every payload symlink to a plain file copy. windows: pacman
+  # trees can carry msys symlinks, and extraction on a windows host cannot
+  # count on symlink creation privileges. macOS rides the same step so the
+  # payload tree has ONE shape on every platform (the limnifs writer does
+  # carry symlink inodes, but content-addressed drops dedup identical
+  # content either way, so the image size is unaffected).
   Dir[File.join(root, "**", "*")].select { |f| File.symlink?(f) }.each do |l|
     target = File.realpath(l)
     FileUtils.rm(l)
