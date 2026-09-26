@@ -1,7 +1,7 @@
 # tebako-packages/inkscape
 
 Feedstock for the **inkscape** tebako toolkit payload — metanorma's
-graphics chain (SVG → PDF/PNG) as a dynamic, relocatable dwarfs image.
+graphics chain (SVG → PDF/PNG) as a dynamic, relocatable limnifs image.
 
 Part of the [tebako-packages](https://github.com/tebako-packages) org;
 conventions and the feedstock template live in
@@ -24,10 +24,10 @@ conventions and the feedstock template live in
 
 ```console
 $ tools/build Tebakofile 1.4.3 x86_64-linux-gnu   # fetch+verify, vcpkg, cmake, closure
-$ tools/stage out/x86_64-linux-gnu x86_64-linux-gnu   # dwarfs image + manifest
+$ tools/stage out/x86_64-linux-gnu x86_64-linux-gnu   # limnifs image + manifest
 $ tools/boot_smoke out/x86_64-linux-gnu           # --version + SVG→PNG/PDF from the image
 $ git tag 1.4.3 && git push --tags                # CI builds legs, publishes the release
 ```
 
-Releases carry per-triplet `*.dwarfs` payloads + `payload-*.yaml`
+Releases carry per-triplet `*.tfs` payloads + `payload-*.yaml`
 manifests + `SHA256SUMS` + `tpkg-registry.yaml`.

@@ -2,7 +2,7 @@
 
 Reference toolkit payload for metanorma's graphics chain: SVG → PDF/PNG
 export via the inkscape CLI, packaged as a **dynamic** relocatable payload
-(dwarfs image, `$ORIGIN`-relative closure, runs later through the preload
+(limnifs image, `$ORIGIN`-relative closure, runs later through the preload
 shim — the shim is built elsewhere; this repo is the PAYLOAD).
 
 ## Version choice: 1.4.3
@@ -107,17 +107,16 @@ Closure method: fixpoint `ldd` walk over every ELF in bin/ + lib/ with
 `LD_LIBRARY_PATH=<vcpkg-lib>:<payload-lib>` (vcpkg first), copying each
 resolved SONAME once into `lib/`. Deterministic, no post-build RPATH edits.
 
-## Image tooling (mkdwarfs-t)
+## Image tooling (tfs CLI)
 
-Task spec said "mkdwarfs-t from tamatebako/dwarfs-t releases" — **those
-releases do not exist yet** (checked 2026-07-26: tags through
-`tebako-v0.14.1-18`, release.yml present, zero published releases; the
-recent release runs all failed). tools/stage therefore: `$MKDWARFS` env →
-cached tool build → builds mkdwarfs/dwarfs/dwarfsextract from the pinned
-commit `05e31631` (tag `tebako-v0.14.1-18`) with the release workflow's own
-configuration (vcpkg root manifest, x64-linux, Release, flatbuffers i.e. no
-fbthrift). When dwarfs-t releases appear, swap in a download+sha256 step —
-the recipe's `image.dwarfs_t` section is the seam.
+The imager is the pinned **tfs CLI** from the tamatebako/tebako release
+(`tfs mkimage` — limnifs, the default tebako image format), fetched in
+the workflow from the Tebakofile `tools:` block pins and cross-checked
+against the release's SHA256SUMS. The same binary is the boot smoke's
+extract reader on every platform. No factory binaries, no source-built
+image tools. (History: the pre-limnifs pipeline built mkdwarfs-t from a
+pinned dwarfs-t commit on linux and used libtfs release assets on macOS —
+the dated transcripts below record that era.)
 
 ## Proof (x86_64-linux-gnu leg, ubuntu-24.04 container)
 
@@ -540,11 +539,9 @@ compiler needed) with powershell prepended for that one child.
 
 ### Boot smoke (the acceptance gate — REQUIRED, not advisory)
 
-No fuse exists for the dwarfs-t tools on windows, and FUSE is not an exec
-mechanism anyway (spec 07 §8): the smoke extracts the image with the
-in-leg-built **tfs-cli** (`tfs extract` — the Rust tfs crate is the
-shipping dwarfs-t reader; staged next to the image as
-`dwarfs-t-bin/tfs.exe` by tools/stage), then, with an EMPTY environment
+FUSE is not an exec mechanism (spec 07 §8): the smoke extracts the image
+with the pinned **tfs-cli** (`tfs extract`; staged next to the image as
+`image-tools/tfs.exe` by tools/stage), then, with an EMPTY environment
 (`env -i`, + HOME and APPDATA as the win32 profile root):
 
 1. `inkscape.exe --version` — proves the exe-directory closure is

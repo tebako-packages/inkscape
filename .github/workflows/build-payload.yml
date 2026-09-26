@@ -121,9 +121,9 @@ jobs:
         # the closed ucrt64 environment (one toolchain, closed PATH, the
         # make toolshim, cargo/botan/bindgen steering) is tools/ci_run.
         run: tools/ci_run ruby tools/build Tebakofile "${{ matrix.version }}" "${{ matrix.platform }}"
-      # The imager: the PUBLISHED tfs CLI (in-process dwarfs-t writer) —
+      # The imager: the PUBLISHED tfs CLI (in-process limnifs writer) —
       # releases are the interface; the feedstock never builds the tebako
-      # stack from source and never shells to mkdwarfs. Every version and
+      # stack from source. Every version and
       # digest flows from Tebakofile's tools block via tools/pins.rb (this
       # workflow carries NO literals), cross-checked against the release's
       # own SHA256SUMS at fetch time.

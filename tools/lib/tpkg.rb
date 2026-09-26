@@ -109,7 +109,7 @@ module Tpkg
 
   # Clone a git repo at a pinned commit and verify HEAD matches the pin.
   # A commit pin authenticates the whole tree; used where upstream ships no
-  # release tarball to sha256 (vcpkg, dwarfs-t). A cache-restored partial
+  # release tarball to sha256 (vcpkg). A cache-restored partial
   # tree (installed/, downloads/ restored under a restore-key with no .git)
   # is initialized IN PLACE: `git clone` refuses a non-empty directory.
   def git_pinned(git_url, commit, dest)
@@ -138,93 +138,53 @@ module Tpkg
     dir
   end
 
-  # Locate or obtain the image tools (mkdwarfs + a mount/extract helper).
-  # Order: $MKDWARFS env → libtfs release assets (macOS legs) → tool cache →
-  # pinned dwarfs-t source build (linux legs; no published dwarfs-t releases
-  # exist — see build-notes). The macOS legs use tamatebako/libtfs release
-  # binaries (sha256-pinned in recipe image.libtfs): dwarfs-t has no macOS
-  # releases and building it on macOS is untested, while libtfs ships a
-  # static mkdwarfs plus tebakofs (multi-backend CLI; `tebakofs extract`
-  # replaces dwarfsextract for the FUSE-less degraded boot-smoke).
-  def ensure_dwarfs_tools(recipe, platform: nil)
-    if ENV["MKDWARFS"] && File.executable?(ENV["MKDWARFS"])
-      log("using $MKDWARFS=#{ENV['MKDWARFS']}")
-      return { "mkdwarfs" => ENV["MKDWARFS"],
-               "dwarfs" => ENV["DWARFS"],
-               "dwarfsextract" => ENV["DWARFSEXTRACT"],
-               "tebakofs" => ENV["TEBAKOFS"] }.compact
+  # Locate or obtain the image tool: the tfs CLI — the imager
+  # (`tfs mkimage`; limnifs, the default tebako image format) and the
+  # smoke's extract reader on every platform. $TFS_CLI (a path, or a bare
+  # name resolved on PATH) wins — CI hands the workflow-fetched,
+  # pin-verified binary over this way. Otherwise the binary is fetched
+  # from the recipe's tools block (the toolchain pin SSOT): the sha256
+  # pin is the trust anchor AND is cross-checked against the release's
+  # own SHA256SUMS (both anchored).
+  def ensure_tfs_cli(recipe, platform: nil)
+    if (want = ENV["TFS_CLI"]) && !want.empty?
+      names = File.extname(want).empty? ? [want, "#{want}.exe"] : [want]
+      resolved = if File.executable?(want) && !File.directory?(want)
+                   want
+                 else
+                   ENV["PATH"].split(/[#{Regexp.escape(File::PATH_SEPARATOR)};]/).uniq
+                     .flat_map { |d| names.map { |n| File.join(d, n) } }
+                     .find { |p| File.executable?(p) && !File.directory?(p) }
+                 end
+      die("$TFS_CLI=#{want} not found or not executable") unless resolved
+      log("using $TFS_CLI=#{resolved}")
+      return { "tfs" => resolved }
     end
 
-    if platform&.end_with?("-windows-ucrt")
-      # The imager/reader on windows is tfs-cli (the Rust tfs crate is the
-      # shipping dwarfs-t reader/writer), built in-leg for
-      # x86_64-pc-windows-gnu and handed over via $TFS_CLI — dwarfs-t has no
-      # windows releases and libtfs (the legacy C++ parity oracle) ships
-      # macOS assets only. tools/stage stages the imager next to the image.
-      return {}
+    spec = recipe.fetch("tools")
+    infix = { "aarch64-macos" => "macos-arm64", "x86_64-macos" => "macos-x86_64",
+              "x86_64-linux-gnu" => "linux-gnu-x86_64", "aarch64-linux-gnu" => "linux-gnu-arm64",
+              "x86_64-windows-ucrt" => "windows-ucrt64" }[platform]
+    die("no tfs CLI asset infix for platform #{platform.inspect}") unless infix
+    exe = platform.end_with?("-windows-ucrt") ? ".exe" : ""
+    asset = "tfs-#{spec['release'].sub(/\Av/, '')}-#{infix}#{exe}"
+    want = spec.fetch("sha256").fetch("tfs").fetch(infix)
+    dir = File.join(cache_dir, "tools", "tebako-#{spec['release']}")
+    FileUtils.mkdir_p(dir)
+    base = "https://github.com/#{spec.fetch('repo')}/releases/download/#{spec['release']}"
+    sums = File.join(dir, "SHA256SUMS")
+    unless File.exist?(sums)
+      sh("curl", "-fsSL", "--retry", "3", "--no-progress-meter", "-o", sums, "#{base}/SHA256SUMS")
     end
-
-    if platform&.end_with?("-macos")
-      spec = recipe.fetch("image").fetch("libtfs")
-      arch = { "aarch64-macos" => "arm64", "x86_64-macos" => "x86_64" }.fetch(platform)
-      dir = File.join(cache_dir, "tools", "libtfs-#{spec['release']}")
-      FileUtils.mkdir_p(dir)
-      tools = {}
-      %w[mkdwarfs tebakofs].each do |t|
-        asset = "#{t}-macos-#{arch}"
-        want = spec.fetch("sha256").fetch(asset)
-        bin = Tpkg.fetch("https://github.com/tamatebako/libtfs/releases/download/#{spec['release']}/#{asset}",
-                         File.join(dir, asset), want)
-        FileUtils.chmod(0o755, bin)
-        tools[t] = bin
-      end
-      return tools
-    end
-
-    pin = recipe.fetch("image").fetch("dwarfs_t")
-    dest = File.join(cache_dir, "dwarfs-t", pin["commit"])
-    bindir = File.join(dest, "bin")
-    mkdwarfs = File.join(bindir, "mkdwarfs")
-    unless File.executable?(mkdwarfs)
-      # dwarfs-t manpage codegen needs python mistletoe; ubuntu-24.04's
-      # PEP 668 blocks plain `pip3 install` (externally-managed-environment)
-      have_mistletoe = -> { system("python3", "-c", "import mistletoe", %i[out err] => File::NULL) }
-      unless have_mistletoe.call
-        sudo = Process.uid.zero? ? [] : ["sudo"]
-        system(*sudo, "apt-get", "install", "-y", "-qq", "python3-mistletoe") if system("command -v apt-get >/dev/null 2>&1")
-        unless have_mistletoe.call
-          system("pip3", "install", "--break-system-packages", "mistletoe") ||
-            system("pip3", "install", "--user", "mistletoe") ||
-            die("could not install python mistletoe (dwarfs-t manpage codegen needs it)")
-        end
-      end
-      log("building mkdwarfs-t from pinned source #{pin['commit'][0, 12]}… (no published releases)")
-      src = git_pinned(pin["git"], pin["commit"], File.join(dest, "src"))
-      triplet = ENV.fetch("TPKG_DWARFS_TRIPLET", "x64-linux")
-      build = File.join(dest, "build")
-      sh("cmake", "-S", src, "-B", build, "-G", "Ninja",
-         "-DCMAKE_BUILD_TYPE=Release",
-         "-DCMAKE_TOOLCHAIN_FILE=#{File.join(vcpkg_root_for(recipe), 'scripts/buildsystems/vcpkg.cmake')}",
-         "-DVCPKG_TARGET_TRIPLET=#{triplet}",
-         "-DVCPKG_MANIFEST_FEATURES=",
-         "-DVCPKG_OVERLAY_PORTS=#{File.join(src, 'vcpkg_ports')}",
-         "-DWITH_TOOLS=ON", "-DWITH_LIBDWARFS=ON", "-DWITH_TESTS=OFF", "-DWITH_BENCHMARKS=OFF")
-      sh("cmake", "--build", build, "--parallel", "4", "--target", "mkdwarfs", "dwarfs", "dwarfsextract")
-      FileUtils.mkdir_p(bindir)
-      %w[mkdwarfs dwarfs dwarfsextract].each do |t|
-        found = Dir[File.join(build, "**", t)].find { |f| File.executable?(f) && !File.directory?(f) }
-        die("built #{t} not found under #{build}") unless found
-        FileUtils.cp(found, bindir)
-      end
-    end
-    { "mkdwarfs" => File.join(bindir, "mkdwarfs"),
-      "dwarfs" => File.join(bindir, "dwarfs"),
-      "dwarfsextract" => File.join(bindir, "dwarfsextract") }
+    got = File.readlines(sums).map(&:split).to_h[asset]
+    die("pin mismatch for #{asset}: recipe=#{want} release=#{got || 'ABSENT'}") unless got == want
+    bin = fetch("#{base}/#{asset}", File.join(dir, asset), want)
+    FileUtils.chmod(0o755, bin)
+    { "tfs" => bin }
   end
 
-  # vcpkg checkout used for the inkscape deps. dwarfs-t's own manifest pins a
-  # different baseline; its build resolves that itself through this root when
-  # TPKG_DWARFS_VCPKG is unset. Kept simple: one vcpkg checkout per recipe.
+  # vcpkg checkout used for the inkscape deps.
+  # Kept simple: one vcpkg checkout per recipe.
   def vcpkg_root_for(recipe)
     spec = recipe.dig("build", "vcpkg") or die("recipe has no build.vcpkg section")
     git_pinned(spec["git"], spec["commit"], File.join(cache_dir, "vcpkg"))

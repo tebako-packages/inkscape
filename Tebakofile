@@ -223,26 +223,11 @@ build:
       CMAKE_MODULE_LINKER_FLAGS: ""
 
 image:
-  format: dwarfs
-  # .tfs everywhere (the tebako fs image — DwarFS-T format). Normal dwarfs
-  # readers cannot read it; never use the .dwarfs extension.
+  format: limnifs
+  # .tfs everywhere (the tebako fs image — LimniFS, the default format;
+  # the store extension stays .tfs regardless of format).
   extension:
     default: tfs
-  # mkdwarfs-t from tamatebako/dwarfs-t. The project has NO published GitHub
-  # releases yet (release.yml exists but never produced one as of 2026-07-26),
-  # so tools/stage builds mkdwarfs/dwarfs from this pinned commit unless
-  # $MKDWARFS/$DWARFS point at prebuilt binaries. (linux legs)
-  dwarfs_t:
-    git: "https://github.com/tamatebako/dwarfs-t.git"
-    commit: "05e316313f7259ccca163e8cdb42cb7058bb3c59"  # tag tebako-v0.14.1-18
-  # macOS legs: mkdwarfs + tebakofs from tamatebako/libtfs releases (static
-  # binaries, libSystem+libc++ only). sha256 pins from the release's
-  # SHA256SUMS, re-verified on first fetch by tools/stage.
-  libtfs:
-    release: "v0.13.0"
-    sha256:
-      mkdwarfs-macos-arm64: "77c2d2c395a37a739ac73711ceb1011efdf2f8200aab1df4961ea0cff3fc959c"
-      tebakofs-macos-arm64: "f29a5e19b5c01ef5639099a65f12176f9d1afa36e3df3c03691568d09cf89357"
 
 # Factory tools used by the workflow (the imager: tfs mkimage/extract):
 # the tebako/tfs CLIs from the tamatebako/tebako release. The asset digests
