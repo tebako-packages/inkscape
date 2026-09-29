@@ -312,3 +312,12 @@ jobs:
               --body "Automated registry entry for ${{ github.ref_name }} (the build-payload publish job; main is protected, so the registry lands by PR)."
           fi
           gh pr merge --auto --squash "$branch" || gh pr merge --squash "$branch"
+
+  ping-registry:
+    # The official registry's 6-hourly aggregate is the self-healing
+    # backstop; this reusable ping (tebako-packages/registry) makes a
+    # same-day publish visible there immediately. Never fatal.
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [release]
+    uses: tebako-packages/registry/.github/workflows/ping-aggregate.yml@main
+    secrets: inherit
