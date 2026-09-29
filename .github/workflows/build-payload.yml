@@ -279,6 +279,7 @@ jobs:
             --version "$PKG_VERSION" \
             --release "tfs:github:tebako-packages/inkscape:${{ github.ref_name }}" \
             --payload "aarch64-macos=out/aarch64-macos/$PKG_NAME-$PKG_VERSION-aarch64-macos.tfs" \
+            --payload "aarch64-linux-gnu=out/aarch64-linux-gnu/$PKG_NAME-$PKG_VERSION-aarch64-linux-gnu.tfs" \
             --payload "x86_64-linux-gnu=out/x86_64-linux-gnu/$PKG_NAME-$PKG_VERSION-x86_64-linux-gnu.tfs" \
             --payload "x86_64-windows-ucrt=out/x86_64-windows-ucrt/$PKG_NAME-$PKG_VERSION-x86_64-windows-ucrt.tfs" \
             --registry-out "$GITHUB_WORKSPACE/tpkg-registry.yaml"

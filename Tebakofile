@@ -255,14 +255,17 @@ tools:
     tebako:
       macos-arm64: "e6269526d268f5ef0b6718fbbde02efe7c957733adca9971c755ad544710f6a2"
       linux-gnu-x86_64: "9f4a610d73b90b77d6bff3ff0e55fb691f74a54d52bd342ada59917195521d9a"
+      linux-gnu-arm64:  "d123fcd6735a0a1fc917125a420e29744a183cabbf4337e3ed49f3e38e20b0c1"
       windows-ucrt64: "b2b98454c626020c50288818568d0e743c0dc7a8d57cdf91d8a8d48489eafdad"
     tebako-shim:
       macos-arm64: "9390ac1fff96df43ac847e271a3ff854a53d5f02baad1f3674cc8596b36ff9e6"
       linux-gnu-x86_64: "f07b025832eaf9ba1c416e306d607791e2a90418a3174b62d4510a7eba9d1f91"
+      linux-gnu-arm64:  "7c199d2571ef903b104303d1fe58d87a0122dab591c0093bac577050ccbb8dd6"
       windows-ucrt64: "fd3da369ddc795f9f2228ce5dbfe3c2ddc7fed2c4337974d44c461d88b4bdaf0"
     tfs:
       macos-arm64: "38f4493c1a65d37ace603db171c23d9a4580bd6053e3a3007800fbcf7a494d83"
       linux-gnu-x86_64: "8b752cb7bc8337960bf77f36cc375e6bc6f75b1d78e6d50c0000a33b26be51b9"
+      linux-gnu-arm64:  "a8042810a1428dd4dbab8ff3473a0015160ed1b529c74007bbbb2bf075c1a03f"
       windows-ucrt64: "e5128ef8be90813bf9300dda39f204fff39f6d1e3eb4963128cbdfaeed88744a"
 
 # Signing (spec 09 §9 — opt-in per feedstock): on tag pushes the publish
@@ -286,6 +289,7 @@ signing:
 # tier, see below).
 platforms:
   - x86_64-linux-gnu
+  - aarch64-linux-gnu
   - aarch64-macos
   - x86_64-windows-ucrt
 
