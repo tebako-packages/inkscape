@@ -184,6 +184,15 @@ jobs:
     name: publish
     if: startsWith(github.ref, 'refs/tags/')
     needs: build
+    # A job-level block REPLACES the workflow-level grant, so contents +
+    # pull-requests are restated; attestations/id-token arm the SLSA L3
+    # provenance step at the job tail (same tag gate — push/PR runs
+    # never run this job, so they never attest).
+    permissions:
+      contents: write
+      pull-requests: write
+      attestations: write
+      id-token: write
     runs-on: macos-14
     env:
       TEBAKO_CLI: ${{ github.workspace }}/.packager/tebako
@@ -283,6 +292,25 @@ jobs:
             --payload "x86_64-linux-gnu=out/x86_64-linux-gnu/$PKG_NAME-$PKG_VERSION-x86_64-linux-gnu.tfs" \
             --payload "x86_64-windows-ucrt=out/x86_64-windows-ucrt/$PKG_NAME-$PKG_VERSION-x86_64-windows-ucrt.tfs" \
             --registry-out "$GITHUB_WORKSPACE/tpkg-registry.yaml"
+
+      # SLSA L3 provenance over the exact bytes this tag ships — the four
+      # payload images the tebako publish step above uploads (the CLI
+      # renames them to the release-asset infix on upload; the attested
+      # digests are the shipped bytes either way, and the attestation's
+      # subjects carry the staged names). The .asc signatures are derived
+      # in-memory by the CLI (never on disk), and the manifest sidecars
+      # are in-run artifacts only — neither is a release asset, so the
+      # enumeration never names them. Gated with the job (tag runs only);
+      # push/PR runs never attest.
+      - name: Attest build provenance
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            out/aarch64-macos/*.tfs
+            out/aarch64-linux-gnu/*.tfs
+            out/x86_64-linux-gnu/*.tfs
+            out/x86_64-windows-ucrt/*.tfs
       # main is branch-protected (and the GitHub-Actions bypass is not
       # available on this plan): the registry lands by bot PR + auto-merge,
       # never by direct push. Idempotent across re-runs of the same tag.
