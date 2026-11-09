@@ -18,7 +18,7 @@ module Tpkg
   PLATFORM_MAP = {
     "x86_64-linux-gnu"   => { "runner" => "ubuntu-22.04",     "vcpkg_triplet" => "x64-linux-dynamic",  "asset_platform" => "linux-gnu-x86_64" },
     "aarch64-linux-gnu"  => { "runner" => "ubuntu-22.04-arm", "vcpkg_triplet" => "arm64-linux-dynamic", "asset_platform" => "linux-gnu-arm64" },
-    "aarch64-macos"      => { "runner" => "macos-14",         "vcpkg_triplet" => "arm64-osx-static",   "asset_platform" => "macos-arm64" },
+    "aarch64-macos"      => { "runner" => "macos-15",         "vcpkg_triplet" => "arm64-osx-static",   "asset_platform" => "macos-arm64" },
     "x86_64-macos"       => { "runner" => "macos-15-intel",   "vcpkg_triplet" => "x64-osx-static",     "asset_platform" => "macos-x86_64" },
     # x64-mingw-dynamic is a vcpkg COMMUNITY triplet (no tools/triplets file):
     # the vcpkg deps ship as DLLs and join the PE/DLL closure like every
