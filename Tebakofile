@@ -127,7 +127,7 @@ build:
   brew_packages:            # macOS legs: Homebrew bottles are the macOS
                             # platform-stack supplier (apt counterpart) — ONE
                             # self-consistent source, same rule as linux
-    # toolchain (preinstalled on macos-14 runners; idempotent).
+    # toolchain (preinstalled on macos-15 runners; idempotent).
     # The autotools set mirrors the linux system_packages toolchain:
     # vcpkg's make-based ports (gsl, libatomic_ops, libbacktrace, …) run
     # autoreconf and hard-require autoconf/automake/autoconf-archive/
