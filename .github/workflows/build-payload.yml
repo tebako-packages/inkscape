@@ -193,7 +193,7 @@ jobs:
       pull-requests: write
       attestations: write
       id-token: write
-    runs-on: macos-14
+    runs-on: macos-15
     env:
       TEBAKO_CLI: ${{ github.workspace }}/.packager/tebako
       TEBAKO_HOME: ${{ github.workspace }}/.tebako
