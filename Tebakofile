@@ -237,7 +237,7 @@ image:
 # SHA256SUMS at fetch time (the same trust-anchor role as upstream.sha256).
 tools:
   repo: "tamatebako/tebako"
-  release: "v2.8.76"         # v2.8.21's imager writes limnifs metadata
+  release: "v2.8.82"         # v2.8.21's imager writes limnifs metadata
                              # inlined up to the 64 MiB product ceiling
                              # (this payload's blob is ≈1.5 MiB — older
                              # tools externalize past 1 MiB and the
@@ -253,20 +253,20 @@ tools:
                              # would fail closed on its own signed publish.
   sha256:
     tebako:
-      macos-arm64: "20740ef56c8725e7fc85f1cc45fd99f454760c4e2bd712f1dd4629640d046b50"
-      linux-gnu-x86_64: "c8ac50d3ac7a2103c8b0bb60ba7631cde0b2273a01c8db8c77bbe610eed2fd1e"
-      linux-gnu-arm64:  "cd6a384572db3befae4349a06db7ff683de1b984c1bae990366bfdc6a1fb4a4d"
-      windows-ucrt64: "5f5dd3ccaeb3745f35928663c3051b109c98bc255a049caa06756e461f91e9fe"
+      macos-arm64: "651bb5c5c3ff56005c29a647b674d01750ccd6ee1d93bea42606abe9c0ad78d4"
+      linux-gnu-x86_64: "5aa15dec33d7092737129b2de270a441b598556fc9f980adcfc142380a71d9cf"
+      linux-gnu-arm64:  "fd54fd32935d95c641b562f7820cb5ea09e88fb4be648b22d2580a941de0d8d3"
+      windows-ucrt64: "d1c6459df120fe21892ced8b60699f0bf1e90b5bde4be05f67304205bcc6a263"
     tebako-shim:
-      macos-arm64: "3d0708dba0e0f606668f4103830ca23fd1dd4aa6300d836281475fb9e11d6593"
-      linux-gnu-x86_64: "33bd5dfeaa5131b192bcf202afc2a84b1da5fcced90cb5627e464776c3697cec"
-      linux-gnu-arm64:  "5ee14155d48655a742f31c519f00a101a030be2c8e37998333af88a01fda9728"
-      windows-ucrt64: "236013a50d629e3450dde9de5ecfeb6a0fb1f0bf7d58154b9bd1b15cb5839427"
+      macos-arm64: "3311d5b3b11ce56f82c5837875426aaaf8dce4b91e96a9b64706f48589ac931c"
+      linux-gnu-x86_64: "c3bea384518035d98b47d910dd6084426222c8dce4aa63c9be217fe17ea881b6"
+      linux-gnu-arm64:  "94b0d03106c45e939a5aef2cf5bccae9c0b33649c6cef09f7b9bd15fe6f05615"
+      windows-ucrt64: "5458fdf4163b0f7072bc3f11fc2f07893f9cc04d9b46710821cdc3d9d8e93897"
     tfs:
-      macos-arm64: "ed0fbc63ae3b352be06bc92088b827c15ac701be23dad29b0d63588d0babc5a2"
-      linux-gnu-x86_64: "6712f110f332236c49acfa0c21899860f5c1c8b8859fa7b8e4158e45a96479fb"
-      linux-gnu-arm64:  "b56d417f12d82f346b8000307b46dc33a2ccc7036baf1d57b37d01b5905d2a25"
-      windows-ucrt64: "0f522a26e4df880ef4171ebbf42b70eff64b35f3d95fb33ca1d574b0654bdf3f"
+      macos-arm64: "d5862163caf2e79b45a844eb97381849de741562e7551b9b71d583237f791dfc"
+      linux-gnu-x86_64: "7a48edad41180a15b5e020b92eca3e3b12e0f1b43ac4988fa28a984ab4888c19"
+      linux-gnu-arm64:  "385a97557d1a45ee4339fed398e531ece8aaa166d561338b35cd930b3ee88f24"
+      windows-ucrt64: "0804fa9872f127fd3046d2bf0ef7f6a166f25120cec9474941a4e832d07f5623"
 
 # Signing (spec 09 §9 — opt-in per feedstock): on tag pushes the publish
 # step signs every payload image (plus SHA256SUMS and the registry itself)
